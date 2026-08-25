@@ -77,7 +77,9 @@ def main() -> int:
 
     # Determine command to dispatch
     command = "show"
-    if args.quick:
+    if args.wizard:
+        command = "wizard"
+    elif args.quick:
         command = "quick"
     elif args.conversation:
         command = "conversation"
@@ -175,7 +177,9 @@ def main() -> int:
 
         def _read_data():
             cmd_bytes = client_socket.readAll().data().decode("utf-8").strip()
-            if cmd_bytes == "quick" or cmd_bytes == "show":
+            if cmd_bytes == "wizard":
+                _open_settings()
+            elif cmd_bytes == "quick" or cmd_bytes == "show":
                 orchestrator.trigger_quick_chat()
             elif cmd_bytes == "conversation":
                 orchestrator.trigger_conversation()
