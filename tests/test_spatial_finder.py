@@ -57,3 +57,33 @@ def test_spatial_analysis_avoids_clutter():
     # The chosen window x position must be on the clean right half (>= 400)
     assert result.target_rect.x >= 400
 
+
+def test_spatial_analysis_mixed_dpi_4k():
+    """Verifies that 4K displays with 1.5x/2.0x scaling output correct logical desktop coordinates."""
+    cfg = AppConfig(overlay=OverlayConfig(min_width=400, min_height=280))
+    finder = SpatialFinder(cfg)
+
+    # Physical 4K frame (3840x2160), Logical Qt screen (2560x1440), DPR=1.5
+    dark_4k_frame = np.zeros((2160, 3840, 3), dtype=np.uint8)
+    monitor_4k = MonitorInfo(
+        index=1,
+        left=0,
+        top=0,
+        width=2560,
+        height=1440,
+        dpr=1.5,
+        physical_left=0,
+        physical_top=0,
+        physical_width=3840,
+        physical_height=2160,
+    )
+
+    result = finder.analyze(dark_4k_frame, monitor_4k)
+
+    # Window bounds must match logical desktop constraints
+    assert result.target_rect.width >= 400
+    assert result.target_rect.height >= 280
+    assert result.target_rect.x + result.target_rect.width <= 2560
+    assert result.target_rect.y + result.target_rect.height <= 1440
+
+

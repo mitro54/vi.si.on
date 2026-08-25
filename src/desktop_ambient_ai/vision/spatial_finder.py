@@ -24,12 +24,12 @@ class TargetRect:
 
 @dataclass
 class ThemeConfig:
-    is_dark_background: bool
-    text_color: str
-    backing_tint: str
-    text_shadow: str
-    border_color: str
-    accent_color: str
+    is_dark_background: bool = True
+    text_color: str = "#F8FAFC"
+    backing_tint: str = "rgba(15, 23, 42, 0.78)"
+    text_shadow: str = "0 1px 3px rgba(0, 0, 0, 0.9)"
+    border_color: str = "rgba(148, 163, 184, 0.25)"
+    accent_color: str = "#38BDF8"
 
 
 @dataclass
