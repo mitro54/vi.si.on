@@ -1,4 +1,4 @@
-# Ambient Desktop AI Overlay 🔮
+# vi.si.on Overlay
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![PyQt6](https://img.shields.io/badge/GUI-PyQt6-green.svg)](https://riverbankcomputing.com/software/pyqt/)
