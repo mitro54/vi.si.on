@@ -33,7 +33,9 @@
     "screen_target": "same_screen",
     "prompt_placement": "center",
     "answer_placement": "clearest_area",
-    "prefer_alternate_monitor": false
+    "prefer_alternate_monitor": false,
+    "prompt_clutter_avoidance": true,
+    "prompt_fallback": "cursor"
   },
   "conversation": {
     "promotion_timeout_seconds": 3,

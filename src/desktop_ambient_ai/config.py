@@ -55,9 +55,11 @@ class OverlayConfig:
     auto_close: Literal["timer", "immediate", "manual"] = "timer"
     auto_close_seconds: int = 15
     screen_target: Literal["same_screen", "alternate_screen"] = "same_screen"
-    prompt_placement: Literal["cursor", "center"] = "cursor"
+    prompt_placement: Literal["cursor", "center", "clearest_area"] = "center"
     answer_placement: Literal["clearest_area", "center", "cursor"] = "clearest_area"
     prefer_alternate_monitor: bool = False
+    prompt_clutter_avoidance: bool = True
+    prompt_fallback: Literal["cursor", "center", "spatial", "none"] = "cursor"
 
 
 

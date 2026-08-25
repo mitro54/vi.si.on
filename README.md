@@ -3,7 +3,7 @@
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![PyQt6](https://img.shields.io/badge/GUI-PyQt6-green.svg)](https://riverbankcomputing.com/software/pyqt/)
 [![Ollama](https://img.shields.io/badge/Local%20LLM-Ollama-purple.svg)](https://ollama.com/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
 An ambient, non-intrusive, transparent desktop AI assistant for **Windows**, **Linux** (Ubuntu / WSL2 / Wayland / X11), and **macOS**. 
 
@@ -251,4 +251,4 @@ See [AGENTS.md](AGENTS.md) for agent specifications and [SYSTEM_SPEC.md](SYSTEM_
 
 ## 📄 License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the [GNU General Public License v3.0 (GPL-3.0)](LICENSE).

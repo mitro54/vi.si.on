@@ -88,31 +88,61 @@ def test_spatial_analysis_mixed_dpi_4k():
 
 
 def test_find_prompt_position_prefers_center_and_avoids_clutter():
-    """Verifies that prompt box prefers screen center on clean screens, but avoids heavily cluttered centers."""
+    """Verifies that prompt box prefers screen center on clean screens, falls back to cursor if center is cluttered, and scans if both are cluttered."""
     cfg = AppConfig()
     finder = SpatialFinder(cfg)
     monitor = MonitorInfo(index=1, left=0, top=0, width=1920, height=1080)
     modal_w, modal_h = 540, 110
 
-    # 1. Clean screen: Must place directly at screen center
-    clean_frame = np.full((1080, 1920, 3), 40, dtype=np.uint8)
-    opt_x, opt_y, theme = finder.find_prompt_position(clean_frame, monitor, modal_w, modal_h)
-
     expected_center_x = (1920 - modal_w) // 2
     expected_center_y = (1080 - modal_h) // 2
+
+    # 1. Clean screen: Must place directly at screen center
+    clean_frame = np.full((1080, 1920, 3), 40, dtype=np.uint8)
+    opt_x, opt_y, theme = finder.find_prompt_position(clean_frame, monitor, modal_w, modal_h, placement_pref="center")
     assert opt_x == expected_center_x
     assert opt_y == expected_center_y
     assert theme.is_dark_background is True
 
-    # 2. Cluttered center: Must shift away from cluttered center
+    # 2. Cluttered center, clean cursor area (e.g. at (200, 200)): Must place at cursor
     cluttered_frame = np.full((1080, 1920, 3), 40, dtype=np.uint8)
-    # Heavy noise in the center region
     cluttered_frame[400:680, 700:1220] = np.random.randint(0, 255, (280, 520, 3), dtype=np.uint8)
+    cursor_pos = (200, 200)
 
-    opt_x2, opt_y2, theme2 = finder.find_prompt_position(cluttered_frame, monitor, modal_w, modal_h)
-    # Position shifted away from the noise in the center
-    assert (opt_x2, opt_y2) != (expected_center_x, expected_center_y)
-    assert 0 <= opt_x2 <= 1920 - modal_w
-    assert 0 <= opt_y2 <= 1080 - modal_h
+    opt_x2, opt_y2, theme2 = finder.find_prompt_position(
+        cluttered_frame, monitor, modal_w, modal_h, placement_pref="center", cursor_pos=cursor_pos
+    )
+    # Cursor is clean, so it should snap near cursor
+    expected_cursor_x = max(24, min(200 - modal_w // 2, 1920 - modal_w - 24))
+    expected_cursor_y = max(24, min(200 - modal_h // 2, 1080 - modal_h - 24))
+    assert opt_x2 == expected_cursor_x
+    assert opt_y2 == expected_cursor_y
+
+    # 3. Both center and cursor are cluttered: Must run spatial scan away from noise
+    cluttered_both = np.full((1080, 1920, 3), 40, dtype=np.uint8)
+    cluttered_both[400:680, 700:1220] = np.random.randint(0, 255, (280, 520, 3), dtype=np.uint8)
+    cluttered_both[100:300, 100:400] = np.random.randint(0, 255, (200, 300, 3), dtype=np.uint8)
+
+    opt_x3, opt_y3, theme3 = finder.find_prompt_position(
+        cluttered_both, monitor, modal_w, modal_h, placement_pref="center", fallback_pref="cursor", cursor_pos=cursor_pos
+    )
+    assert (opt_x3, opt_y3) != (expected_center_x, expected_center_y)
+    assert (opt_x3, opt_y3) != (expected_cursor_x, expected_cursor_y)
+    assert 0 <= opt_x3 <= 1920 - modal_w
+    assert 0 <= opt_y3 <= 1080 - modal_h
+
+    # 4. Configured fallback_pref="spatial" (bypasses mouse check even if cursor is given)
+    opt_x4, opt_y4, theme4 = finder.find_prompt_position(
+        cluttered_frame, monitor, modal_w, modal_h, placement_pref="center", fallback_pref="spatial", cursor_pos=cursor_pos
+    )
+    # Must do spatial scan, not cursor snap
+    assert opt_x4 != expected_cursor_x
+
+    # 5. Configured fallback_pref="none" (strictly stays at center)
+    opt_x5, opt_y5, theme5 = finder.find_prompt_position(
+        cluttered_frame, monitor, modal_w, modal_h, placement_pref="center", fallback_pref="none", cursor_pos=cursor_pos
+    )
+    assert opt_x5 == expected_center_x
+    assert opt_y5 == expected_center_y
 
 

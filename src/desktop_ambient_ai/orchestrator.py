@@ -185,6 +185,8 @@ class Orchestrator(QObject):
         modal_w, modal_h = self.input_modal.width(), self.input_modal.height()
         placement = self.config.overlay.prompt_placement
 
+        use_clutter_avoidance = getattr(self.config.overlay, "prompt_clutter_avoidance", True)
+
         theme = None
         chosen_pos: Optional[QPoint] = None
 
@@ -201,14 +203,55 @@ class Orchestrator(QObject):
                 theme = self.spatial_finder._compute_theme(roi, is_fallback=False)
             except Exception:
                 pass
+        elif not use_clutter_avoidance:
+            # Strict user placement without spatial clutter shifting
+            if placement == "center" and target_mon:
+                target_x = target_mon.left + (target_mon.width - modal_w) // 2
+                target_y = target_mon.top + (target_mon.height - modal_h) // 2
+            else:
+                try:
+                    from PyQt6.QtGui import QCursor
+                    c = QCursor.pos()
+                    target_x = c.x() - modal_w // 2
+                    target_y = c.y() - modal_h // 2
+                except Exception:
+                    target_x = target_mon.left + (target_mon.width - modal_w) // 2
+                    target_y = target_mon.top + (target_mon.height - modal_h) // 2
+            margin = 24
+            clamped_x = max(target_mon.left + margin, min(target_x, target_mon.right - modal_w - margin))
+            clamped_y = max(target_mon.top + margin, min(target_y, target_mon.bottom - modal_h - margin))
+            chosen_pos = QPoint(clamped_x, clamped_y)
+            try:
+                frame = self.capture.capture_monitor(target_mon)
+                dpr = float(target_mon.dpr) if hasattr(target_mon, "dpr") and target_mon.dpr else 1.0
+                rel_x = max(0, int((clamped_x - target_mon.left) * dpr))
+                rel_y = max(0, int((clamped_y - target_mon.top) * dpr))
+                rel_w = int(modal_w * dpr)
+                rel_h = int(modal_h * dpr)
+                roi = frame[rel_y : rel_y + rel_h, rel_x : rel_x + rel_w]
+                theme = self.spatial_finder._compute_theme(roi, is_fallback=False)
+            except Exception:
+                pass
         else:
             try:
                 frame = self.capture.capture_monitor(target_mon)
+                cursor_pt = None
+                try:
+                    from PyQt6.QtGui import QCursor
+                    c = QCursor.pos()
+                    cursor_pt = (c.x(), c.y())
+                except Exception:
+                    pass
+
+                fallback_strat = getattr(self.config.overlay, "prompt_fallback", "cursor")
                 opt_x, opt_y, opt_theme = self.spatial_finder.find_prompt_position(
                     frame=frame,
                     monitor=target_mon,
                     modal_w=modal_w,
                     modal_h=modal_h,
+                    placement_pref=placement,
+                    fallback_pref=fallback_strat,
+                    cursor_pos=cursor_pt,
                 )
                 chosen_pos = QPoint(opt_x, opt_y)
                 theme = opt_theme

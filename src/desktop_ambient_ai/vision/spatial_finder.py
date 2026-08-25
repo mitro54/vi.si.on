@@ -255,10 +255,14 @@ class SpatialFinder:
         monitor: MonitorInfo,
         modal_w: int,
         modal_h: int,
+        placement_pref: str = "center",
+        fallback_pref: str = "cursor",
+        cursor_pos: Optional[Tuple[int, int]] = None,
     ) -> tuple[int, int, ThemeConfig]:
-        """Finds optimal placement for input prompt modal.
+        """Finds optimal placement for input prompt modal respecting user preferences and clutter.
 
-        Prefers center of screen, but shifts to lower clutter areas if the center is heavily cluttered.
+        - placement_pref: "center", "cursor", or "clearest_area"
+        - fallback_pref: "cursor", "center", "spatial", or "none"
         """
         dpr = float(monitor.dpr) if hasattr(monitor, "dpr") and monitor.dpr else 1.0
         fallback_x = monitor.left + (monitor.width - modal_w) // 2
@@ -284,7 +288,18 @@ class SpatialFinder:
             center_x = max(0, (frame_w - phys_w) // 2)
             center_y = max(0, (frame_h - phys_h) // 2)
 
-            # 1. Canny edges + Integral image for instant O(1) density calculation
+            cursor_x, cursor_y = center_x, center_y
+            has_cursor = False
+            if cursor_pos is not None:
+                cx, cy = cursor_pos
+                if (monitor.left <= cx < monitor.right) and (monitor.top <= cy < monitor.bottom):
+                    rel_cx = int((cx - monitor.left) * dpr)
+                    rel_cy = int((cy - monitor.top) * dpr)
+                    cursor_x = max(margin, min(rel_cx - phys_w // 2, frame_w - phys_w - margin))
+                    cursor_y = max(margin, min(rel_cy - phys_h // 2, frame_h - phys_h - margin))
+                    has_cursor = True
+
+            # 1. Canny edges with fine thresholds to detect text, code, and UI elements
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             edges = cv2.Canny(gray, threshold1=30, threshold2=100)
             integral = cv2.integral(edges)
@@ -303,33 +318,42 @@ class SpatialFinder:
                 area = (x2 - x1) * (y2 - y1)
                 return float(sum_edges) / float(area * 255.0) if area > 0 else float("inf")
 
+            ACCEPTABLE_CLUTTER = 0.02
             center_density = get_density(center_x, center_y, phys_w, phys_h)
+            cursor_density = get_density(cursor_x, cursor_y, phys_w, phys_h) if has_cursor else float("inf")
 
-            # Strict clutter threshold: allow only very light/calm background in center (<= 2%)
-            ACCEPTABLE_CENTER_CLUTTER = 0.02
-            chosen_x = center_x
-            chosen_y = center_y
+            chosen_x, chosen_y = center_x, center_y
 
-            if center_density > ACCEPTABLE_CENTER_CLUTTER:
-                # Center has clutter; scan for the cleanest area with a subtle center preference
-                step = max(8, int(16 * dpr))
-                max_scan_x = frame_w - phys_w - margin
-                max_scan_y = frame_h - phys_h - margin
-
-                if max_scan_x > margin and max_scan_y > margin:
-                    best_score = float("inf")
-                    max_diag = math.hypot(frame_w / 2, frame_h / 2) or 1.0
-
-                    for y in range(margin, max_scan_y, step):
-                        for x in range(margin, max_scan_x, step):
-                            density = get_density(x, y, phys_w, phys_h)
-                            dist = math.hypot(x - center_x, y - center_y) / max_diag
-                            # Heavily prioritize clean space with a minor center bias (0.03)
-                            score = density + 0.03 * dist
-                            if score < best_score:
-                                best_score = score
-                                chosen_x = x
-                                chosen_y = y
+            # Tier 1 & Tier 2 Evaluation with configurable fallback
+            if placement_pref == "clearest_area":
+                chosen_x, chosen_y = self._scan_clearest_area(
+                    integral, frame_w, frame_h, phys_w, phys_h, margin, center_x, center_y, dpr
+                )
+            elif placement_pref == "cursor" and has_cursor:
+                if cursor_density <= ACCEPTABLE_CLUTTER:
+                    chosen_x, chosen_y = cursor_x, cursor_y
+                elif fallback_pref == "none":
+                    chosen_x, chosen_y = cursor_x, cursor_y
+                elif fallback_pref == "center" and center_density <= ACCEPTABLE_CLUTTER:
+                    chosen_x, chosen_y = center_x, center_y
+                else:
+                    # Spatial scan
+                    chosen_x, chosen_y = self._scan_clearest_area(
+                        integral, frame_w, frame_h, phys_w, phys_h, margin, cursor_x, cursor_y, dpr
+                    )
+            else:
+                # Default 'center' preference
+                if center_density <= ACCEPTABLE_CLUTTER:
+                    chosen_x, chosen_y = center_x, center_y
+                elif fallback_pref == "none":
+                    chosen_x, chosen_y = center_x, center_y
+                elif fallback_pref == "cursor" and has_cursor and cursor_density <= ACCEPTABLE_CLUTTER:
+                    chosen_x, chosen_y = cursor_x, cursor_y
+                else:
+                    # Spatial scan
+                    chosen_x, chosen_y = self._scan_clearest_area(
+                        integral, frame_w, frame_h, phys_w, phys_h, margin, center_x, center_y, dpr
+                    )
 
             logical_x = monitor.left + int(chosen_x / dpr)
             logical_y = monitor.top + int(chosen_y / dpr)
@@ -340,3 +364,49 @@ class SpatialFinder:
             return logical_x, logical_y, theme
         except Exception:
             return fallback_x, fallback_y, fallback_theme
+
+    def _scan_clearest_area(
+        self,
+        integral: np.ndarray,
+        frame_w: int,
+        frame_h: int,
+        phys_w: int,
+        phys_h: int,
+        margin: int,
+        origin_x: int,
+        origin_y: int,
+        dpr: float,
+    ) -> tuple[int, int]:
+        """Scans grid to find the lowest clutter area with distance penalty from origin."""
+        step = max(8, int(16 * dpr))
+        max_scan_x = frame_w - phys_w - margin
+        max_scan_y = frame_h - phys_h - margin
+
+        best_score = float("inf")
+        chosen_x = origin_x
+        chosen_y = origin_y
+
+        if max_scan_x > margin and max_scan_y > margin:
+            max_diag = math.hypot(frame_w / 2, frame_h / 2) or 1.0
+
+            for y in range(margin, max_scan_y, step):
+                for x in range(margin, max_scan_x, step):
+                    x1, y1 = max(0, x), max(0, y)
+                    x2, y2 = min(frame_w, x + phys_w), min(frame_h, y + phys_h)
+                    sum_edges = (
+                        integral[y2, x2]
+                        - integral[y1, x2]
+                        - integral[y2, x1]
+                        + integral[y1, x1]
+                    )
+                    area = (x2 - x1) * (y2 - y1)
+                    density = float(sum_edges) / float(area * 255.0) if area > 0 else float("inf")
+
+                    dist = math.hypot(x - origin_x, y - origin_y) / max_diag
+                    score = density + 0.03 * dist
+                    if score < best_score:
+                        best_score = score
+                        chosen_x = x
+                        chosen_y = y
+
+        return chosen_x, chosen_y
