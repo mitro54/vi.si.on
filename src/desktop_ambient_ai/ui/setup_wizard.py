@@ -652,61 +652,6 @@ class HotkeysPage(QWizardPage):
         return 6
 
 
-class AddMCPServerDialog(QDialog):
-    """Clean modal dialog for registering a new MCP tool server."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Register MCP Tool Server")
-        self.setFixedSize(500, 320)
-        self.setStyleSheet(generate_wizard_qss())
-
-        layout = QVBoxLayout(self)
-        layout.setSpacing(12)
-        layout.setContentsMargins(18, 18, 18, 18)
-
-        layout.addWidget(QLabel("Server Name (Unique Identifier):", self))
-        self.name_input = QLineEdit(self)
-        self.name_input.setPlaceholderText("e.g. filesystem, github, memory, postgres")
-        layout.addWidget(self.name_input)
-
-        layout.addWidget(QLabel("Command (Executable):", self))
-        self.cmd_input = QLineEdit(self)
-        self.cmd_input.setText("npx")
-        self.cmd_input.setPlaceholderText("e.g. npx, uvx, python, docker")
-        layout.addWidget(self.cmd_input)
-
-        layout.addWidget(QLabel("Arguments (Command line options & flags):", self))
-        self.args_input = QLineEdit(self)
-        self.args_input.setPlaceholderText("e.g. -y @modelcontextprotocol/server-filesystem C:\\Users")
-        layout.addWidget(self.args_input)
-
-        btn_box = QHBoxLayout()
-        btn_box.addStretch()
-        cancel_btn = QPushButton("Cancel", self)
-        cancel_btn.setObjectName("SecondaryBtn")
-        cancel_btn.clicked.connect(self.reject)
-        btn_box.addWidget(cancel_btn)
-
-        ok_btn = QPushButton("Add Server", self)
-        ok_btn.clicked.connect(self.accept)
-        btn_box.addWidget(ok_btn)
-        layout.addLayout(btn_box)
-
-    def get_server_config(self) -> Optional[MCPServerConfig]:
-        name = self.name_input.text().strip()
-        cmd = self.cmd_input.text().strip()
-        args_text = self.args_input.text().strip()
-        if not name or not cmd:
-            return None
-        import shlex
-        try:
-            args = shlex.split(args_text, posix=(sys.platform != "win32"))
-        except Exception:
-            args = args_text.split()
-        return MCPServerConfig(name=name, transport="stdio", command=cmd, args=args)
-
-
 class ToolsFeaturesPage(QWizardPage):
     def __init__(self, config: AppConfig, parent=None):
         super().__init__(parent)
@@ -779,27 +724,102 @@ class ToolsFeaturesPage(QWizardPage):
         # MCP Servers Group
         mcp_group = QGroupBox("Model Context Protocol (MCP) Tool Servers", container)
         m_layout = QVBoxLayout(mcp_group)
-        m_layout.setSpacing(10)
+        m_layout.setSpacing(12)
 
         mcp_info = QLabel(
-            "Connect local or remote MCP servers (filesystem, github, postgres) to give your LLM agentic tool capabilities.",
+            "Connect external MCP servers to give your LLM agentic tool capabilities (e.g. read files, search GitHub, query databases).",
             mcp_group,
         )
         mcp_info.setWordWrap(True)
         mcp_info.setStyleSheet("color: #94A3B8; font-size: 12px;")
         m_layout.addWidget(mcp_info)
 
+        # Active Servers List
+        m_layout.addWidget(QLabel("Active MCP Servers:", mcp_group))
         self.mcp_list = QListWidget(mcp_group)
         self.mcp_list.setMinimumHeight(100)
-        m_layout.addWidget(self.mcp_list)
-
         self._mcp_configs: List[MCPServerConfig] = list(self.config.mcp_servers)
         self._refresh_mcp_list()
+        m_layout.addWidget(self.mcp_list)
 
+        # Preset Dropdown
+        preset_box = QHBoxLayout()
+        preset_box.addWidget(QLabel("Quick Preset:", mcp_group))
+        self.mcp_preset_combo = QComboBox(mcp_group)
+        self.mcp_preset_combo.addItems([
+            "Select a Popular Preset...",
+            "Filesystem (Read/Write local directories via @modelcontextprotocol/server-filesystem)",
+            "GitHub (Repo search, issues, PRs via @modelcontextprotocol/server-github)",
+            "Memory (Knowledge graph memory via @modelcontextprotocol/server-memory)",
+            "Web Fetch (HTTP web fetch via mcp-server-fetch)",
+            "Brave Search (Web search via @modelcontextprotocol/server-brave-search)",
+            "Custom MCP Server (stdio)",
+        ])
+        self.mcp_preset_combo.currentIndexChanged.connect(self._on_mcp_preset_selected)
+        preset_box.addWidget(self.mcp_preset_combo)
+        m_layout.addLayout(preset_box)
+
+        # Inline Input Fields
+        input_grid = QVBoxLayout()
+        input_grid.setSpacing(8)
+
+        row0 = QHBoxLayout()
+        row0.addWidget(QLabel("Transport Type:", mcp_group))
+        self.mcp_transport_combo = QComboBox(mcp_group)
+        self.mcp_transport_combo.addItems([
+            "Local Process (stdio) — Runs command directly",
+            "Remote Server (SSE / HTTP) — Connects to URL address",
+        ])
+        self.mcp_transport_combo.currentIndexChanged.connect(self._on_mcp_transport_changed)
+        row0.addWidget(self.mcp_transport_combo)
+        input_grid.addLayout(row0)
+
+        row1 = QHBoxLayout()
+        row1.addWidget(QLabel("Name:", mcp_group))
+        self.mcp_name_input = QLineEdit(mcp_group)
+        self.mcp_name_input.setPlaceholderText("e.g. filesystem, github, remote_tools")
+        row1.addWidget(self.mcp_name_input)
+
+        self.mcp_cmd_label = QLabel("Command:", mcp_group)
+        row1.addWidget(self.mcp_cmd_label)
+        self.mcp_cmd_input = QLineEdit(mcp_group)
+        self.mcp_cmd_input.setText("npx")
+        self.mcp_cmd_input.setPlaceholderText("e.g. npx, uvx, python, docker")
+        row1.addWidget(self.mcp_cmd_input)
+        input_grid.addLayout(row1)
+
+        row2 = QHBoxLayout()
+        self.mcp_args_label = QLabel("Args:", mcp_group)
+        row2.addWidget(self.mcp_args_label)
+        self.mcp_args_input = QLineEdit(mcp_group)
+        self.mcp_args_input.setPlaceholderText("e.g. -y @modelcontextprotocol/server-filesystem C:\\Users")
+        row2.addWidget(self.mcp_args_input)
+        input_grid.addLayout(row2)
+
+        # URL Address row for remote SSE servers
+        self.mcp_url_row = QHBoxLayout()
+        self.mcp_url_label = QLabel("Server URL (Address):", mcp_group)
+        self.mcp_url_row.addWidget(self.mcp_url_label)
+        self.mcp_url_input = QLineEdit(mcp_group)
+        self.mcp_url_input.setPlaceholderText("e.g. http://localhost:8000/sse or https://api.mcp.example.com/sse")
+        self.mcp_url_row.addWidget(self.mcp_url_input)
+        input_grid.addLayout(self.mcp_url_row)
+        self.mcp_url_label.hide()
+        self.mcp_url_input.hide()
+
+        row3 = QHBoxLayout()
+        row3.addWidget(QLabel("Env (Optional):", mcp_group))
+        self.mcp_env_input = QLineEdit(mcp_group)
+        self.mcp_env_input.setPlaceholderText("e.g. GITHUB_TOKEN=ghp_xxx, API_KEY=yyy")
+        row3.addWidget(self.mcp_env_input)
+        input_grid.addLayout(row3)
+
+        m_layout.addLayout(input_grid)
+
+        # Action Buttons
         btn_row = QHBoxLayout()
-        self.add_mcp_btn = QPushButton("+ Add MCP Server", mcp_group)
-        self.add_mcp_btn.setObjectName("SecondaryBtn")
-        self.add_mcp_btn.clicked.connect(self._add_mcp_dialog)
+        self.add_mcp_btn = QPushButton("+ Add Server to List", mcp_group)
+        self.add_mcp_btn.clicked.connect(self._add_inline_mcp)
         btn_row.addWidget(self.add_mcp_btn)
 
         self.remove_mcp_btn = QPushButton("✕ Remove Selected", mcp_group)
@@ -813,22 +833,97 @@ class ToolsFeaturesPage(QWizardPage):
 
         outer_layout.addWidget(_wrap_in_scroll(container, self))
 
+    def _on_mcp_transport_changed(self, index: int) -> None:
+        is_remote = (index == 1)
+        self.mcp_url_label.setVisible(is_remote)
+        self.mcp_url_input.setVisible(is_remote)
+        self.mcp_cmd_label.setVisible(not is_remote)
+        self.mcp_cmd_input.setVisible(not is_remote)
+        self.mcp_args_label.setVisible(not is_remote)
+        self.mcp_args_input.setVisible(not is_remote)
+
+    def _on_mcp_preset_selected(self, index: int) -> None:
+        presets = {
+            1: ("filesystem", "stdio", "npx", "-y @modelcontextprotocol/server-filesystem C:\\Users", "", ""),
+            2: ("github", "stdio", "npx", "-y @modelcontextprotocol/server-github", "", "GITHUB_PERSONAL_ACCESS_TOKEN=ghp_..."),
+            3: ("memory", "stdio", "npx", "-y @modelcontextprotocol/server-memory", "", ""),
+            4: ("fetch", "stdio", "uvx", "mcp-server-fetch", "", ""),
+            5: ("brave_search", "stdio", "npx", "-y @modelcontextprotocol/server-brave-search", "", "BRAVE_API_KEY=..."),
+            6: ("custom_tool", "stdio", "python", "my_mcp_server.py", "", ""),
+        }
+        if index in presets:
+            name, transport, cmd, args, url, env = presets[index]
+            self.mcp_name_input.setText(name)
+            self.mcp_transport_combo.setCurrentIndex(0 if transport == "stdio" else 1)
+            self.mcp_cmd_input.setText(cmd)
+            self.mcp_args_input.setText(args)
+            self.mcp_url_input.setText(url)
+            self.mcp_env_input.setText(env)
+
+    def _add_inline_mcp(self) -> None:
+        name = self.mcp_name_input.text().strip()
+        is_remote = (self.mcp_transport_combo.currentIndex() == 1)
+        transport = "sse" if is_remote else "stdio"
+        cmd = self.mcp_cmd_input.text().strip() if not is_remote else None
+        args_text = self.mcp_args_input.text().strip() if not is_remote else ""
+        url = self.mcp_url_input.text().strip() if is_remote else None
+        env_text = self.mcp_env_input.text().strip()
+
+        if not name:
+            return
+        if not is_remote and not cmd:
+            return
+        if is_remote and not url:
+            return
+
+        import shlex
+        import sys
+        args = []
+        if args_text:
+            try:
+                args = shlex.split(args_text, posix=(sys.platform != "win32"))
+            except Exception:
+                args = args_text.split()
+
+        env_dict = {}
+        if env_text:
+            for item in env_text.split(","):
+                if "=" in item:
+                    k, v = item.split("=", 1)
+                    env_dict[k.strip()] = v.strip()
+
+        # Remove existing server with same name if updating
+        self._mcp_configs = [s for s in self._mcp_configs if s.name != name]
+        self._mcp_configs.append(
+            MCPServerConfig(
+                name=name,
+                transport=transport,
+                command=cmd,
+                args=args,
+                url=url,
+                env=env_dict,
+            )
+        )
+        self._refresh_mcp_list()
+
+        # Reset inputs
+        self.mcp_name_input.clear()
+        self.mcp_args_input.clear()
+        self.mcp_url_input.clear()
+        self.mcp_env_input.clear()
+        self.mcp_preset_combo.setCurrentIndex(0)
+
     def _refresh_mcp_list(self) -> None:
         self.mcp_list.clear()
         if not self._mcp_configs:
             self.mcp_list.addItem("No MCP servers configured.")
         else:
             for s in self._mcp_configs:
-                args_str = " ".join(s.args) if s.args else ""
-                self.mcp_list.addItem(f"🔌 {s.name}  [{s.command} {args_str}]")
-
-    def _add_mcp_dialog(self) -> None:
-        dlg = AddMCPServerDialog(self)
-        if dlg.exec():
-            cfg = dlg.get_server_config()
-            if cfg:
-                self._mcp_configs.append(cfg)
-                self._refresh_mcp_list()
+                if s.transport in ("sse", "http") and s.url:
+                    self.mcp_list.addItem(f"🌐 {s.name} [Remote URL: {s.url}]")
+                else:
+                    args_str = " ".join(s.args) if s.args else ""
+                    self.mcp_list.addItem(f"🔌 {s.name} [{s.command} {args_str}]")
 
     def _remove_selected_mcp(self) -> None:
         idx = self.mcp_list.currentRow()
