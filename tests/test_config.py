@@ -43,3 +43,48 @@ def test_save_and_load_config(tmp_path: Path):
     assert loaded.overlay.min_width == 500
     assert loaded.overlay.min_height == 350
     assert loaded.overlay.auto_close == "manual"
+    assert loaded.overlay.prompt_clutter_avoidance is True
+    assert loaded.overlay.prompt_fallback == "cursor"
+
+
+def test_autostart_logic(monkeypatch, tmp_path):
+    from desktop_ambient_ai.utils.autostart import setup_autostart, disable_autostart
+    import sys
+
+    # 1. Windows test
+    monkeypatch.setattr(sys, "platform", "win32")
+    fake_appdata = tmp_path / "win_appdata"
+    (fake_appdata / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("APPDATA", str(fake_appdata))
+
+    assert setup_autostart() is True
+    vbs = fake_appdata / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / "vi.si.on.vbs"
+    assert vbs.exists()
+    assert "uv run vi.si.on" in vbs.read_text(encoding="utf-8")
+    assert disable_autostart() is True
+    assert not vbs.exists()
+
+    # 2. Linux test
+    monkeypatch.setattr(sys, "platform", "linux")
+    fake_home = tmp_path / "linux_home"
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    assert setup_autostart() is True
+    desktop = fake_home / ".config" / "autostart" / "vi.si.on.desktop"
+    assert desktop.exists()
+    assert "run vi.si.on" in desktop.read_text(encoding="utf-8")
+    assert disable_autostart() is True
+    assert not desktop.exists()
+
+    # 3. macOS test
+    monkeypatch.setattr(sys, "platform", "darwin")
+    fake_mac_home = tmp_path / "mac_home"
+    monkeypatch.setattr(Path, "home", lambda: fake_mac_home)
+
+    assert setup_autostart() is True
+    plist = fake_mac_home / "Library" / "LaunchAgents" / "com.mitro54.vi.si.on.plist"
+    assert plist.exists()
+    assert "com.mitro54.vi.si.on" in plist.read_text(encoding="utf-8")
+    assert disable_autostart() is True
+    assert not plist.exists()
+

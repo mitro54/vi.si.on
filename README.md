@@ -89,6 +89,19 @@ It listens for global hotkeys, performs real-time screen analysis to determine t
 - [`uv`](https://docs.astral.sh/uv/) (Ultra-fast Python package and project manager)
 - [Ollama](https://ollama.com/) running locally (`ollama serve`) OR API keys for Cloud providers (OpenAI, Anthropic, Gemini, Groq).
 
+#### Linux System Packages (PyQt6 & OpenCV GUI dependencies):
+On Linux distributions, install the required graphics and X11/xcb libraries:
+```bash
+# Ubuntu / Debian / Pop!_OS / Linux Mint
+sudo apt update && sudo apt install -y libgl1 libglib2.0-0 libxcb-cursor0 libxkbcommon-x11-0 libegl1 libx11-xcb1
+
+# Arch Linux / Manjaro
+sudo pacman -S --needed mesa libglvnd glib2 libxkbcommon-x11 xcb-util-cursor
+
+# Fedora / RHEL
+sudo dnf install -y mesa-libGL glib2 libxkbcommon-x11 xcb-util-cursor
+```
+
 ---
 
 ### 1. Clone & Install Dependencies
@@ -111,22 +124,75 @@ uv sync --all-groups
 ```powershell
 # Launch the vi.si.on background assistant
 python -m uv run vi.si.on
-```
 
-### Running on Linux / WSL2 (Ubuntu / X11 / Wayland)
-```bash
+# Or directly if uv is added to your PATH:
 uv run vi.si.on
 ```
 
+### Running on Linux (Ubuntu / Arch / Fedora / Wayland / X11)
+```bash
+uv run vi.si.on
+```
+*(On Linux Wayland sessions, `vi.si.on` automatically routes display rendering via `xcb;wayland` to ensure transparent hardware overlays and global shortcut capture.)*
+
 ### Launch Interactive Setup Wizard
 To open the graphical configuration wizard at any time:
-```powershell
+```bash
 python -m uv run vi.si.on --wizard
 ```
 
 ### Running the Test Suite
-```powershell
+```bash
 python -m uv run pytest
+```
+
+---
+
+## 🚀 Running on System Startup (Autostart)
+
+### 1. One-Command Setup (Windows & Linux)
+You can configure **vi.si.on** to automatically start in the background when you log in:
+
+```bash
+# On Windows (PowerShell / CMD)
+python -m uv run vi.si.on --enable-autostart
+
+# On Linux
+uv run vi.si.on --enable-autostart
+
+# Disable autostart
+uv run vi.si.on --disable-autostart
+```
+
+* **On Windows**: Generates a silent background launcher (`vi.si.on.vbs`) in your Windows Startup directory (`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup`), launching `vi.si.on` without an intrusive terminal window pop-up.
+* **On Linux**: Generates an XDG Autostart desktop entry at `~/.config/autostart/vi.si.on.desktop`.
+
+---
+
+### 2. Linux Systemd User Service (Alternative)
+For advanced Linux users running systemd:
+
+1. Create `~/.config/systemd/user/vi.si.on.service`:
+```ini
+[Unit]
+Description=vi.si.on Ambient Desktop AI Overlay
+After=graphical-session.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/vi.si.on
+ExecStart=/usr/local/bin/uv run vi.si.on
+Restart=on-failure
+Environment=QT_QPA_PLATFORM=xcb
+
+[Install]
+WantedBy=graphical-session.target
+```
+
+2. Enable and start the service:
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now vi.si.on.service
 ```
 
 ---
@@ -182,7 +248,9 @@ All settings can be configured via the **Setup Wizard** (`--wizard`) or directly
     "screen_target": "same_screen",
     "prompt_placement": "center",
     "answer_placement": "clearest_area",
-    "prefer_alternate_monitor": false
+    "prefer_alternate_monitor": false,
+    "prompt_clutter_avoidance": true,
+    "prompt_fallback": "cursor"
   },
   "conversation": {
     "promotion_timeout_seconds": 15,

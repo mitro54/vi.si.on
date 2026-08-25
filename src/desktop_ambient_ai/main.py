@@ -43,6 +43,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--new", action="store_true", help="Trigger brand new conversation modal")
     parser.add_argument("--snip", action="store_true", help="Trigger interactive screen region snipping")
     parser.add_argument("--picker", action="store_true", help="Open conversation history picker")
+    parser.add_argument("--enable-autostart", action="store_true", help="Configure vi.si.on to launch on system login")
+    parser.add_argument("--disable-autostart", action="store_true", help="Remove vi.si.on from system login autostart")
     parser.add_argument("--quit", action="store_true", help="Stop running ambient daemon instance")
     return parser.parse_args()
 
@@ -65,6 +67,14 @@ def main() -> int:
 
     args = parse_args()
 
+    # Handle Autostart management CLI commands
+    if args.enable_autostart:
+        from .utils.autostart import setup_autostart
+        return 0 if setup_autostart() else 1
+    if args.disable_autostart:
+        from .utils.autostart import disable_autostart
+        return 0 if disable_autostart() else 1
+
     # Determine command to dispatch
     command = "show"
     if args.quick:
@@ -79,6 +89,13 @@ def main() -> int:
         command = "picker"
     elif args.quit:
         command = "quit"
+
+    # Guard against headless Linux/SSH sessions without graphical display server
+    if sys.platform.startswith("linux"):
+        if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+            print("[vi.si.on Error] No active graphical display server (DISPLAY/WAYLAND_DISPLAY) found.", file=sys.stderr)
+            print("vi.si.on requires an active desktop graphical environment (X11, Wayland, or WSLg) to render transparent ambient overlays.", file=sys.stderr)
+            return 1
 
     # Initialize Qt Application
     app = QApplication(sys.argv)
