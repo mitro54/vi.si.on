@@ -4,6 +4,7 @@ Computer vision heuristics for spatial clutter minimization and dynamic contrast
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Tuple
 
@@ -247,3 +248,95 @@ class SpatialFinder:
                 border_color="rgba(148, 163, 184, 0.25)",
                 accent_color="#38BDF8",
             )
+
+    def find_prompt_position(
+        self,
+        frame: Optional[np.ndarray],
+        monitor: MonitorInfo,
+        modal_w: int,
+        modal_h: int,
+    ) -> tuple[int, int, ThemeConfig]:
+        """Finds optimal placement for input prompt modal.
+
+        Prefers center of screen, but shifts to lower clutter areas if the center is heavily cluttered.
+        """
+        dpr = float(monitor.dpr) if hasattr(monitor, "dpr") and monitor.dpr else 1.0
+        fallback_x = monitor.left + (monitor.width - modal_w) // 2
+        fallback_y = monitor.top + (monitor.height - modal_h) // 2
+        fallback_theme = ThemeConfig(
+            is_dark_background=True,
+            text_color="#F8FAFC",
+            backing_tint="rgba(15, 23, 42, 0.88)",
+            text_shadow="0 1px 3px rgba(0, 0, 0, 0.9)",
+            border_color="rgba(148, 163, 184, 0.25)",
+            accent_color="#38BDF8",
+        )
+
+        if frame is None or frame.size == 0:
+            return fallback_x, fallback_y, fallback_theme
+
+        try:
+            frame_h, frame_w = frame.shape[:2]
+            phys_w = min(int(modal_w * dpr), frame_w)
+            phys_h = min(int(modal_h * dpr), frame_h)
+            margin = int(24 * dpr)
+
+            center_x = max(0, (frame_w - phys_w) // 2)
+            center_y = max(0, (frame_h - phys_h) // 2)
+
+            # 1. Canny edges + Integral image for instant O(1) density calculation
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            edges = cv2.Canny(gray, threshold1=30, threshold2=100)
+            integral = cv2.integral(edges)
+
+            def get_density(px: int, py: int, pw: int, ph: int) -> float:
+                x1, y1 = max(0, px), max(0, py)
+                x2, y2 = min(frame_w, px + pw), min(frame_h, py + ph)
+                if x2 <= x1 or y2 <= y1:
+                    return float("inf")
+                sum_edges = (
+                    integral[y2, x2]
+                    - integral[y1, x2]
+                    - integral[y2, x1]
+                    + integral[y1, x1]
+                )
+                area = (x2 - x1) * (y2 - y1)
+                return float(sum_edges) / float(area * 255.0) if area > 0 else float("inf")
+
+            center_density = get_density(center_x, center_y, phys_w, phys_h)
+
+            # Strict clutter threshold: allow only very light/calm background in center (<= 2%)
+            ACCEPTABLE_CENTER_CLUTTER = 0.02
+            chosen_x = center_x
+            chosen_y = center_y
+
+            if center_density > ACCEPTABLE_CENTER_CLUTTER:
+                # Center has clutter; scan for the cleanest area with a subtle center preference
+                step = max(8, int(16 * dpr))
+                max_scan_x = frame_w - phys_w - margin
+                max_scan_y = frame_h - phys_h - margin
+
+                if max_scan_x > margin and max_scan_y > margin:
+                    best_score = float("inf")
+                    max_diag = math.hypot(frame_w / 2, frame_h / 2) or 1.0
+
+                    for y in range(margin, max_scan_y, step):
+                        for x in range(margin, max_scan_x, step):
+                            density = get_density(x, y, phys_w, phys_h)
+                            dist = math.hypot(x - center_x, y - center_y) / max_diag
+                            # Heavily prioritize clean space with a minor center bias (0.03)
+                            score = density + 0.03 * dist
+                            if score < best_score:
+                                best_score = score
+                                chosen_x = x
+                                chosen_y = y
+
+            logical_x = monitor.left + int(chosen_x / dpr)
+            logical_y = monitor.top + int(chosen_y / dpr)
+
+            roi = frame[chosen_y : chosen_y + phys_h, chosen_x : chosen_x + phys_w]
+            theme = self._compute_theme(roi, is_fallback=False)
+
+            return logical_x, logical_y, theme
+        except Exception:
+            return fallback_x, fallback_y, fallback_theme

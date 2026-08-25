@@ -87,3 +87,32 @@ def test_spatial_analysis_mixed_dpi_4k():
     assert result.target_rect.y + result.target_rect.height <= 1440
 
 
+def test_find_prompt_position_prefers_center_and_avoids_clutter():
+    """Verifies that prompt box prefers screen center on clean screens, but avoids heavily cluttered centers."""
+    cfg = AppConfig()
+    finder = SpatialFinder(cfg)
+    monitor = MonitorInfo(index=1, left=0, top=0, width=1920, height=1080)
+    modal_w, modal_h = 540, 110
+
+    # 1. Clean screen: Must place directly at screen center
+    clean_frame = np.full((1080, 1920, 3), 40, dtype=np.uint8)
+    opt_x, opt_y, theme = finder.find_prompt_position(clean_frame, monitor, modal_w, modal_h)
+
+    expected_center_x = (1920 - modal_w) // 2
+    expected_center_y = (1080 - modal_h) // 2
+    assert opt_x == expected_center_x
+    assert opt_y == expected_center_y
+    assert theme.is_dark_background is True
+
+    # 2. Cluttered center: Must shift away from cluttered center
+    cluttered_frame = np.full((1080, 1920, 3), 40, dtype=np.uint8)
+    # Heavy noise in the center region
+    cluttered_frame[400:680, 700:1220] = np.random.randint(0, 255, (280, 520, 3), dtype=np.uint8)
+
+    opt_x2, opt_y2, theme2 = finder.find_prompt_position(cluttered_frame, monitor, modal_w, modal_h)
+    # Position shifted away from the noise in the center
+    assert (opt_x2, opt_y2) != (expected_center_x, expected_center_y)
+    assert 0 <= opt_x2 <= 1920 - modal_w
+    assert 0 <= opt_y2 <= 1080 - modal_h
+
+

@@ -181,50 +181,48 @@ class Orchestrator(QObject):
         target_mon = target_monitor or self._get_target_monitor()
         self._active_prompt_monitor = target_mon
 
-        # Compute anticipated modal coordinates to analyze background luminance
+        # Determine prompt coordinates and adaptive contrast theme
         modal_w, modal_h = self.input_modal.width(), self.input_modal.height()
         placement = self.config.overlay.prompt_placement
 
+        theme = None
+        chosen_pos: Optional[QPoint] = None
+
         if exact_pos:
-            clamped_x, clamped_y = exact_pos.x(), exact_pos.y()
-        elif placement == "center" and target_mon:
-            target_x = target_mon.left + (target_mon.width - modal_w) // 2
-            target_y = target_mon.top + (target_mon.height - modal_h) // 2
-            margin = 24
-            clamped_x = max(target_mon.left + margin, min(target_x, target_mon.right - modal_w - margin))
-            clamped_y = max(target_mon.top + margin, min(target_y, target_mon.bottom - modal_h - margin))
+            chosen_pos = exact_pos
+            try:
+                frame = self.capture.capture_monitor(target_mon)
+                dpr = float(target_mon.dpr) if hasattr(target_mon, "dpr") and target_mon.dpr else 1.0
+                rel_x = max(0, int((exact_pos.x() - target_mon.left) * dpr))
+                rel_y = max(0, int((exact_pos.y() - target_mon.top) * dpr))
+                rel_w = int(modal_w * dpr)
+                rel_h = int(modal_h * dpr)
+                roi = frame[rel_y : rel_y + rel_h, rel_x : rel_x + rel_w]
+                theme = self.spatial_finder._compute_theme(roi, is_fallback=False)
+            except Exception:
+                pass
         else:
             try:
-                c_pos = QCursor.pos()
-                target_x = c_pos.x() - modal_w // 2
-                target_y = c_pos.y() - modal_h // 2
+                frame = self.capture.capture_monitor(target_mon)
+                opt_x, opt_y, opt_theme = self.spatial_finder.find_prompt_position(
+                    frame=frame,
+                    monitor=target_mon,
+                    modal_w=modal_w,
+                    modal_h=modal_h,
+                )
+                chosen_pos = QPoint(opt_x, opt_y)
+                theme = opt_theme
             except Exception:
-                target_x = target_mon.left + (target_mon.width - modal_w) // 2
-                target_y = target_mon.top + (target_mon.height - modal_h) // 2
-            margin = 24
-            clamped_x = max(target_mon.left + margin, min(target_x, target_mon.right - modal_w - margin))
-            clamped_y = max(target_mon.top + margin, min(target_y, target_mon.bottom - modal_h - margin))
-
-        # Capture background pixels directly behind the prompt box to determine contrast polarity
-        theme = None
-        try:
-            frame = self.capture.capture_monitor(target_mon)
-            dpr = float(target_mon.dpr) if hasattr(target_mon, "dpr") and target_mon.dpr else 1.0
-            rel_x = max(0, int((clamped_x - target_mon.left) * dpr))
-            rel_y = max(0, int((clamped_y - target_mon.top) * dpr))
-            rel_w = int(modal_w * dpr)
-            rel_h = int(modal_h * dpr)
-            roi = frame[rel_y : rel_y + rel_h, rel_x : rel_x + rel_w]
-            theme = self.spatial_finder._compute_theme(roi, is_fallback=False)
-        except Exception:
-            pass
+                fallback_x = target_mon.left + (target_mon.width - modal_w) // 2
+                fallback_y = target_mon.top + (target_mon.height - modal_h) // 2
+                chosen_pos = QPoint(fallback_x, fallback_y)
 
         self.input_modal.show_modal(
             monitor=target_mon,
             placement=placement,
             theme=theme,
             clear_text=clear_text,
-            exact_pos=exact_pos,
+            exact_pos=chosen_pos,
         )
         self._active_prompt_rect = self.input_modal.geometry()
 
