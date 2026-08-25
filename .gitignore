@@ -1,0 +1,59 @@
+# Virtual environments
+.venv/
+env/
+venv/
+ENV/
+.env
+.env.*
+!.env.example
+
+# Python cache & build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+*.manifest
+*.spec
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Local data, databases, and logs
+data/
+*.db
+*.sqlite3
+searxng-data/
+chroma_db/
+.ambient_knowledge/
+*.log
+logs/
+scratch/
+
+# IDE & OS specific files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
