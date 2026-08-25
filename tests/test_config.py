@@ -60,7 +60,8 @@ def test_autostart_logic(monkeypatch, tmp_path):
     assert setup_autostart() is True
     vbs = fake_appdata / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup" / "vi.si.on.vbs"
     assert vbs.exists()
-    assert "uv run vi.si.on" in vbs.read_text(encoding="utf-8")
+    vbs_text = vbs.read_text(encoding="utf-8")
+    assert "desktop_ambient_ai.main" in vbs_text or "run vi.si.on" in vbs_text
     assert disable_autostart() is True
     assert not vbs.exists()
 

@@ -103,45 +103,50 @@ uv sync --all-groups
 
 ## 💻 Running the Application
 
-### Windows (PowerShell / Terminal / CMD)
-```powershell
-python -m uv run vi.si.on
-```
-
-### Linux / macOS
+### Standard Launch
 ```bash
 uv run vi.si.on
 ```
+*(Or if using direct Python environment: `python -m desktop_ambient_ai.main`)*
 
 ### Graphical Setup Wizard
-Launch the interactive configuration wizard at any time:
+Launch the interactive configuration wizard at any time to configure models, overlay dimensions, hotkeys, web search, MCP servers, and background startup:
 ```bash
-python -m uv run vi.si.on --wizard
+uv run vi.si.on --wizard
 ```
+> [!TIP]
+> **All-In-One Setup via Wizard:**
+> Both **Autostart on system login** and **Global Hotkeys** (including automatic GNOME Wayland shortcut registration on Ubuntu) can be configured directly inside the Setup Wizard on first launch or via `--wizard`—no extra commands required!
 
 ### Test Suite Execution
 ```bash
-python -m uv run pytest
+uv run pytest
 ```
 
 ---
 
-## 🚀 Autostart Configuration
+## 🚀 Autostart & Shortcut Configuration
 
-### One-Command Setup (Windows, Linux, macOS)
-Configure **vi.si.on** to launch silently in the background on user login:
+### Automated via Setup Wizard
+You can enable autostart and shortcut bindings automatically on the final page of the **Setup Wizard** (`uv run vi.si.on --wizard`).
+
+### CLI Management (Optional)
+You can also enable or disable background autostart anytime via the CLI:
 
 ```bash
-# Enable background autostart
-python -m uv run vi.si.on --enable-autostart
+# Enable background autostart (also configures GNOME shortcuts on Ubuntu)
+uv run vi.si.on --enable-autostart
 
 # Disable autostart
-python -m uv run vi.si.on --disable-autostart
+uv run vi.si.on --disable-autostart
+
+# Setup GNOME desktop shortcuts directly (Ubuntu / Wayland)
+uv run vi.si.on --setup-shortcuts
 ```
 
-- **Windows**: Places a lightweight launcher (`vi.si.on.vbs`) in `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup` without a console window.
-- **Linux**: Creates an XDG desktop entry at `~/.config/autostart/vi.si.on.desktop`.
-- **macOS**: Registers a LaunchAgent plist at `~/Library/LaunchAgents/com.vision.overlay.plist`.
+- **Windows**: Places a lightweight launcher (`vi.si.on.vbs`) in `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup` executing silently without a console window.
+- **Linux**: Creates an XDG desktop entry at `~/.config/autostart/vi.si.on.desktop` and registers GNOME custom shortcuts via `gsettings`.
+- **macOS**: Registers a LaunchAgent plist at `~/Library/LaunchAgents/com.mitro54.vi.si.on.plist`.
 
 ---
 
@@ -156,6 +161,13 @@ python -m uv run vi.si.on --disable-autostart
 | **`Alt + ↑ / ↓`** | **Session Cycling** | Cycles across conversation threads. |
 | **`Esc`** | **Dismiss** | Fades out active modal or overlay. |
 | **Mouse Wheel** | **Scroll Text** | Scrolls content and pauses the auto-dismiss timer. |
+
+> [!NOTE]
+> **Ubuntu / Wayland Users:**
+> Modern Ubuntu (22.04 / 24.04 / 26.04) uses **Wayland** by default, which restricts apps from listening to global key events for security.
+> - **Option 1 (Automated - Recommended)**: Completing the **Setup Wizard** (`uv run vi.si.on --wizard`) or running `uv run vi.si.on --setup-shortcuts` automatically registers native GNOME shortcuts via `gsettings`.
+> - **Option 2 (Manual)**: Add Custom Shortcuts in **GNOME Settings → Keyboard → Keyboard Shortcuts → Custom Shortcuts** mapped to `uv run vi.si.on --quick`, `uv run vi.si.on --conversation`, `uv run vi.si.on --new`, or `uv run vi.si.on --snip`.
+> - **Option 3 (X11)**: Switch to **Ubuntu on Xorg** at the login screen (gear icon), where global hotkeys work natively out-of-the-box.
 
 ---
 

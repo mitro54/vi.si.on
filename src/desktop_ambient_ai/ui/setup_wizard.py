@@ -4,6 +4,7 @@ Interactive first-launch Setup Wizard for models, hotkeys, dimensions, typograph
 
 from __future__ import annotations
 
+import sys
 from typing import List, Optional
 
 from PyQt6.QtCore import Qt
@@ -643,6 +644,15 @@ class HotkeysPage(QWizardPage):
         d_box.addWidget(self.hk_dismiss_input)
         g_layout.addLayout(d_box)
 
+        if sys.platform.startswith("linux"):
+            tip = QLabel(
+                "💡 <b>Ubuntu / GNOME Note:</b> Native desktop keyboard shortcuts will be automatically configured for you upon clicking <b>Finish</b>.",
+                group,
+            )
+            tip.setWordWrap(True)
+            tip.setStyleSheet("color: #38BDF8; font-size: 12px; margin-top: 6px; padding: 6px; background: rgba(56, 189, 248, 0.1); border-radius: 4px;")
+            g_layout.addWidget(tip)
+
         layout.addWidget(group)
         layout.addStretch()
 
@@ -963,6 +973,11 @@ class SummaryPage(QWizardPage):
         self.summary_label.setWordWrap(True)
         layout.addWidget(self.summary_label)
 
+        self.autostart_cb = QCheckBox("Launch vi.si.on automatically on system login (Silent Background Daemon)", container)
+        self.autostart_cb.setChecked(True)
+        self.autostart_cb.setStyleSheet("color: #38BDF8; font-size: 13px; margin-top: 10px; font-weight: bold;")
+        layout.addWidget(self.autostart_cb)
+
         layout.addStretch()
         outer_layout.addWidget(_wrap_in_scroll(container, self))
 
@@ -1166,5 +1181,20 @@ class SetupWizard(QWizard):
 
         self.config.setup_complete = True
         save_config(self.config)
+
+        # Autostart & Shortcut Registration
+        s_page: SummaryPage = self.page(7)
+        if s_page.autostart_cb.isChecked():
+            try:
+                from ..utils.autostart import setup_autostart
+                setup_autostart()
+            except Exception as e:
+                print(f"[SetupWizard] Note: Autostart setup error: {e}")
+        elif sys.platform.startswith("linux"):
+            try:
+                from ..utils.autostart import setup_gnome_shortcuts
+                setup_gnome_shortcuts()
+            except Exception:
+                pass
 
         super().accept()
