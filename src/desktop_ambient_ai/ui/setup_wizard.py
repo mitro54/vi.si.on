@@ -4,19 +4,21 @@ Interactive first-launch Setup Wizard for models, hotkeys, dimensions, typograph
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import List, Optional
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QPalette
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDialog,
     QFileDialog,
     QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
     QPushButton,
     QRadioButton,
     QScrollArea,
@@ -28,7 +30,7 @@ from PyQt6.QtWidgets import (
     QWizardPage,
 )
 
-from ..config import AppConfig, save_config
+from ..config import AppConfig, MCPServerConfig, save_config
 from ..llm.ollama_client import OllamaWorker
 from .styles import generate_wizard_qss
 
@@ -650,12 +652,67 @@ class HotkeysPage(QWizardPage):
         return 6
 
 
+class AddMCPServerDialog(QDialog):
+    """Clean modal dialog for registering a new MCP tool server."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Register MCP Tool Server")
+        self.setFixedSize(500, 320)
+        self.setStyleSheet(generate_wizard_qss())
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(18, 18, 18, 18)
+
+        layout.addWidget(QLabel("Server Name (Unique Identifier):", self))
+        self.name_input = QLineEdit(self)
+        self.name_input.setPlaceholderText("e.g. filesystem, github, memory, postgres")
+        layout.addWidget(self.name_input)
+
+        layout.addWidget(QLabel("Command (Executable):", self))
+        self.cmd_input = QLineEdit(self)
+        self.cmd_input.setText("npx")
+        self.cmd_input.setPlaceholderText("e.g. npx, uvx, python, docker")
+        layout.addWidget(self.cmd_input)
+
+        layout.addWidget(QLabel("Arguments (Command line options & flags):", self))
+        self.args_input = QLineEdit(self)
+        self.args_input.setPlaceholderText("e.g. -y @modelcontextprotocol/server-filesystem C:\\Users")
+        layout.addWidget(self.args_input)
+
+        btn_box = QHBoxLayout()
+        btn_box.addStretch()
+        cancel_btn = QPushButton("Cancel", self)
+        cancel_btn.setObjectName("SecondaryBtn")
+        cancel_btn.clicked.connect(self.reject)
+        btn_box.addWidget(cancel_btn)
+
+        ok_btn = QPushButton("Add Server", self)
+        ok_btn.clicked.connect(self.accept)
+        btn_box.addWidget(ok_btn)
+        layout.addLayout(btn_box)
+
+    def get_server_config(self) -> Optional[MCPServerConfig]:
+        name = self.name_input.text().strip()
+        cmd = self.cmd_input.text().strip()
+        args_text = self.args_input.text().strip()
+        if not name or not cmd:
+            return None
+        import shlex
+        try:
+            args = shlex.split(args_text, posix=(sys.platform != "win32"))
+        except Exception:
+            args = args_text.split()
+        return MCPServerConfig(name=name, transport="stdio", command=cmd, args=args)
+
+
 class ToolsFeaturesPage(QWizardPage):
     def __init__(self, config: AppConfig, parent=None):
         super().__init__(parent)
         self.config = config
-        self.setTitle("Tools, Web Search & Knowledge Base")
-        self.setSubTitle("Configure external search augmentation and document vector index.")
+        self.setTitle("Tools, Web Search, Knowledge Base & MCP")
+        self.setSubTitle("Configure external search augmentation, local vector index, and MCP tool servers.")
 
         outer_layout = QVBoxLayout(self)
         outer_layout.setContentsMargins(10, 10, 10, 10)
@@ -718,9 +775,69 @@ class ToolsFeaturesPage(QWizardPage):
         kb_layout.addLayout(top_box)
 
         layout.addWidget(kb_group)
+
+        # MCP Servers Group
+        mcp_group = QGroupBox("Model Context Protocol (MCP) Tool Servers", container)
+        m_layout = QVBoxLayout(mcp_group)
+        m_layout.setSpacing(10)
+
+        mcp_info = QLabel(
+            "Connect local or remote MCP servers (filesystem, github, postgres) to give your LLM agentic tool capabilities.",
+            mcp_group,
+        )
+        mcp_info.setWordWrap(True)
+        mcp_info.setStyleSheet("color: #94A3B8; font-size: 12px;")
+        m_layout.addWidget(mcp_info)
+
+        self.mcp_list = QListWidget(mcp_group)
+        self.mcp_list.setMinimumHeight(100)
+        m_layout.addWidget(self.mcp_list)
+
+        self._mcp_configs: List[MCPServerConfig] = list(self.config.mcp_servers)
+        self._refresh_mcp_list()
+
+        btn_row = QHBoxLayout()
+        self.add_mcp_btn = QPushButton("+ Add MCP Server", mcp_group)
+        self.add_mcp_btn.setObjectName("SecondaryBtn")
+        self.add_mcp_btn.clicked.connect(self._add_mcp_dialog)
+        btn_row.addWidget(self.add_mcp_btn)
+
+        self.remove_mcp_btn = QPushButton("✕ Remove Selected", mcp_group)
+        self.remove_mcp_btn.setObjectName("SecondaryBtn")
+        self.remove_mcp_btn.clicked.connect(self._remove_selected_mcp)
+        btn_row.addWidget(self.remove_mcp_btn)
+        m_layout.addLayout(btn_row)
+
+        layout.addWidget(mcp_group)
         layout.addStretch()
 
         outer_layout.addWidget(_wrap_in_scroll(container, self))
+
+    def _refresh_mcp_list(self) -> None:
+        self.mcp_list.clear()
+        if not self._mcp_configs:
+            self.mcp_list.addItem("No MCP servers configured.")
+        else:
+            for s in self._mcp_configs:
+                args_str = " ".join(s.args) if s.args else ""
+                self.mcp_list.addItem(f"🔌 {s.name}  [{s.command} {args_str}]")
+
+    def _add_mcp_dialog(self) -> None:
+        dlg = AddMCPServerDialog(self)
+        if dlg.exec():
+            cfg = dlg.get_server_config()
+            if cfg:
+                self._mcp_configs.append(cfg)
+                self._refresh_mcp_list()
+
+    def _remove_selected_mcp(self) -> None:
+        idx = self.mcp_list.currentRow()
+        if 0 <= idx < len(self._mcp_configs):
+            self._mcp_configs.pop(idx)
+            self._refresh_mcp_list()
+
+    def get_mcp_servers(self) -> List[MCPServerConfig]:
+        return list(self._mcp_configs)
 
     def _browse_kb_dir(self) -> None:
         directory = QFileDialog.getExistingDirectory(self, "Select Knowledge Base Folder")
@@ -777,6 +894,8 @@ class SummaryPage(QWizardPage):
         t_page: ToolsFeaturesPage = wizard.page(6)
         web_on = "Enabled" if t_page.web_cb.isChecked() else "Disabled"
         kb_on = f"Enabled ({t_page.kb_dir_input.text()})" if t_page.kb_cb.isChecked() else "Disabled"
+        mcp_count = len(t_page.get_mcp_servers())
+        mcp_desc = f"{mcp_count} server(s) configured" if mcp_count > 0 else "None"
 
         text = (
             f"<div style='line-height: 1.6; font-size: 13px; color: #E2E8F0;'>"
@@ -784,7 +903,8 @@ class SummaryPage(QWizardPage):
             f"<b>Minimum Overlay Size:</b> {min_w} × {min_h} px<br/>"
             f"<b>Prompt Location:</b> {prompt_pos} (Clutter Avoidance: {clutter_on})<br/>"
             f"<b>Web Search:</b> {web_on}<br/>"
-            f"<b>Knowledge Base:</b> {kb_on}<br/><br/>"
+            f"<b>Knowledge Base:</b> {kb_on}<br/>"
+            f"<b>MCP Tool Servers:</b> {mcp_desc}<br/><br/>"
             f"<span style='color: #38BDF8;'>Click <b>Finish</b> to save and start using vi.si.on. If you close this window before clicking Finish, your configuration remains unchanged.</span>"
             f"</div>"
         )
@@ -945,6 +1065,9 @@ class SetupWizard(QWizard):
         self.config.knowledge_base.enabled = t_page.kb_cb.isChecked()
         self.config.knowledge_base.watch_directory = t_page.kb_dir_input.text().strip() or None
         self.config.knowledge_base.top_k = t_page.kb_topk_spin.value()
+
+        # Save configured MCP servers
+        self.config.mcp_servers = t_page.get_mcp_servers()
 
         self.config.setup_complete = True
         save_config(self.config)
