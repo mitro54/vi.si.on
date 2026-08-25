@@ -203,7 +203,7 @@ def main() -> int:
                 client = ollama.Client(host=config.provider.ollama_host, timeout=5)
                 # Setting keep_alive: 0 immediately evicts the model from VRAM/RAM
                 client.generate(model=config.provider.model, keep_alive=0)
-                print(f"[Ambient AI] Unloaded model '{config.provider.model}' from memory.")
+                print(f"[vi.si.on] Unloaded model '{config.provider.model}' from memory.")
             except Exception:
                 pass
 

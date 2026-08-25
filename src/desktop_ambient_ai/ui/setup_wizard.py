@@ -44,7 +44,7 @@ class WelcomePage(QWizardPage):
         layout.setSpacing(14)
 
         info = QLabel(
-            "Ambient Desktop AI runs silently in the background, analyzing screen clutter "
+            "vi.si.on runs silently in the background, analyzing screen clutter "
             "and streaming helpful answers without interrupting your active workflow.",
             self,
         )

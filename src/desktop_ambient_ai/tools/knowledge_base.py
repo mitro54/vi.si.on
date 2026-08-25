@@ -57,7 +57,7 @@ class KnowledgeBase:
         os.makedirs(persist_dir, exist_ok=True)
         self.client = chromadb.PersistentClient(path=persist_dir)
         self.collection = self.client.get_or_create_collection(
-            name="ambient_knowledge",
+            name="vi_si_on_knowledge",
             metadata={"hnsw:space": "cosine"}
         )
 
