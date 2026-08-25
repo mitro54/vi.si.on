@@ -5,7 +5,7 @@
 [![Ollama](https://img.shields.io/badge/Local%20LLM-Ollama-purple.svg)](https://ollama.com/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
-An ambient, non-intrusive, transparent desktop AI assistant for **Windows**, **Linux** (Ubuntu / WSL2 / Wayland / X11), and **macOS**. 
+An ambient, non-intrusive, transparent desktop AI assistant for **Windows**, **Linux** (Ubuntu / WSL2 / Wayland / X11), and **macOS**. Will eventually bring a version of this that adapts to br.ai.n.
 
 It listens for global hotkeys, performs real-time screen analysis to determine the least-cluttered desktop region, dynamically calculates contrast/typography parameters across mixed-DPI monitors, and streams responses from local LLMs (via [Ollama](https://ollama.com)) or cloud providers (via [LiteLLM](https://github.com/BerriAI/litellm)).
 
