@@ -3,6 +3,7 @@
     "quick_chat": "<alt>+1",
     "conversation": "<alt>+2",
     "new_conversation": "<alt>+<shift>+2",
+    "ocr_selection": "<alt>+3",
     "dismiss": "<esc>"
   },
   "provider": {

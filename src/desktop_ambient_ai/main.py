@@ -41,6 +41,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--quick", action="store_true", help="Trigger quick query modal")
     parser.add_argument("--conversation", action="store_true", help="Trigger active conversation modal")
     parser.add_argument("--new", action="store_true", help="Trigger brand new conversation modal")
+    parser.add_argument("--snip", action="store_true", help="Trigger interactive screen region snipping")
     parser.add_argument("--picker", action="store_true", help="Open conversation history picker")
     parser.add_argument("--quit", action="store_true", help="Stop running ambient daemon instance")
     return parser.parse_args()
@@ -72,6 +73,8 @@ def main() -> int:
         command = "conversation"
     elif args.new:
         command = "new"
+    elif args.snip:
+        command = "snip"
     elif args.picker:
         command = "picker"
     elif args.quit:
@@ -79,18 +82,18 @@ def main() -> int:
 
     # Initialize Qt Application
     app = QApplication(sys.argv)
-    app.setApplicationName("Ambient Desktop AI")
-    app.setOrganizationName("AmbientAI")
+    app.setApplicationName("vi.si.on")
+    app.setOrganizationName("vi.si.on")
     app.setQuitOnLastWindowClosed(False)
 
     # 1. Check if an instance is already running
     if send_ipc_command(command):
-        print(f"[Ambient AI] Dispatched command '{command}' to running instance.")
+        print(f"[vi.si.on] Dispatched command '{command}' to running instance.")
         return 0
 
     # If --quit was requested but no instance was running
     if args.quit:
-        print("[Ambient AI] No running instance found.")
+        print("[vi.si.on] No running instance found.")
         return 0
 
     # 2. Start Primary Instance
@@ -130,6 +133,7 @@ def main() -> int:
     tray_manager.quick_chat_requested.connect(orchestrator.trigger_quick_chat)
     tray_manager.conversation_requested.connect(orchestrator.trigger_conversation)
     tray_manager.new_conversation_requested.connect(orchestrator.trigger_new_conversation)
+    tray_manager.snip_requested.connect(orchestrator.trigger_ocr_selection)
     tray_manager.quit_requested.connect(app.quit)
 
     def _open_settings():
@@ -145,7 +149,7 @@ def main() -> int:
     # Remove stale server socket if left from previous crash
     QLocalServer.removeServer(IPC_SERVER_NAME)
     if not ipc_server.listen(IPC_SERVER_NAME):
-        print(f"[Ambient AI] Warning: Could not start IPC server: {ipc_server.errorString()}")
+        print(f"[vi.si.on] Warning: Could not start IPC server: {ipc_server.errorString()}")
 
     def _handle_ipc_connection():
         client_socket = ipc_server.nextPendingConnection()
@@ -160,6 +164,8 @@ def main() -> int:
                 orchestrator.trigger_conversation()
             elif cmd_bytes == "new":
                 orchestrator.trigger_new_conversation()
+            elif cmd_bytes == "snip":
+                orchestrator.trigger_ocr_selection()
             elif cmd_bytes == "picker":
                 orchestrator.show_conversation_picker()
             elif cmd_bytes == "quit":
@@ -175,10 +181,12 @@ def main() -> int:
     print(f"  • Quick Query:             {config.hotkeys.quick_chat}")
     print(f"  • Active Conversation:     {config.hotkeys.conversation}")
     print(f"  • New Conversation:        {config.hotkeys.new_conversation}")
+    print(f"  • Region Snip (Vision):    {config.hotkeys.ocr_selection}")
     print(f"  • Dismiss / Close:         {config.hotkeys.dismiss}")
     print("\nCLI Triggers:")
     print("  • uv run vi.si.on --quick")
     print("  • uv run vi.si.on --conversation")
+    print("  • uv run vi.si.on --snip")
     print("  • uv run vi.si.on --picker")
     print("  • uv run vi.si.on --wizard")
     print("  • uv run vi.si.on --quit")

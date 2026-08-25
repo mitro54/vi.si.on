@@ -44,8 +44,6 @@ dev = [
 
 [project.scripts]
 "vi.si.on" = "desktop_ambient_ai.main:main"
-vision = "desktop_ambient_ai.main:main"
-ambient-ai = "desktop_ambient_ai.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

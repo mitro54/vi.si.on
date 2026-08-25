@@ -6,8 +6,8 @@
 * **GUI Engine**: `PyQt6` (Hardware-accelerated translucent frameless windows)
 * **Screen Grabber**: `mss` (High-performance multi-monitor screenshot capture)
 * **Computer Vision**: `OpenCV` (`cv2`), `NumPy`
-* **Local LLM Runner**: Ollama (targeting models like `llama3.2:3b`, `mistral:7b`, `qwen2.5:3b`, etc.)
-* **Cloud LLM Support**: `litellm` (OpenAI, Anthropic, Google, Mistral, etc.)
+* **Local LLM Runner**: Ollama (supports any user-installed local LLM or multimodal vision model)
+* **Cloud LLM Support**: `litellm` (OpenAI, Anthropic, Google, Mistral, Groq, etc.)
 * **Web Search**: SearXNG JSON API via `httpx`
 * **Knowledge Base**: ChromaDB for vector retrieval + `watchdog` for folder auto-ingestion
 * **Tool Protocols**: Model Context Protocol (`mcp[cli]>=2.0`)

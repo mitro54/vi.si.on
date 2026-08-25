@@ -16,18 +16,19 @@ It listens for global hotkeys, performs real-time screen analysis to determine t
 ### ⚡ Dual Interaction Modes & Hotkeys
 - **`Alt + 1` — Quick One-Off Query**:
   - Ephemeral, low-latency answer box.
-  - Automatically routes to your lightweight fast model (`num_ctx_quick: 8192`, `keep_alive_quick: 3m`).
-- **`Alt + 2` — Active Conversation / Session Picker**:
+  - Automatically routes to your lightweight fast model (`keep_alive_quick: 3m`).
+- **`Alt + 2` — Active Conversation / Real-Time Switcher**:
   - Resumes your active persistent conversation.
-  - Hold `Alt + 2` and use `↑` / `↓` arrow keys to browse and select past conversation sessions in an Alt-Tab style switcher.
-  - Routes to your deep reasoning model (`num_ctx_conversation: 16384` / `65536`, `keep_alive_conversation: 10m`).
+  - **Hold or press `Alt + 2` repeatedly** (or use `↑` / `↓` arrow keys) to cycle through past conversation sessions in real time without any numbers being typed into your query.
+  - Routes to your deep reasoning model (`keep_alive_conversation: 10m`).
 - **`Alt + Shift + 2` — New Conversation**: Starts a fresh, clean memorized conversation thread.
-- **`Esc` — Instant Dismissal**: Smoothly fades out the overlay at any time.
+- **`Alt + 3` — Multi-Region Screen Snipper**: Captures one or multiple screen regions for multimodal visual analysis.
+- **`Esc` — Instant Dismissal**: Smoothly fades out active modals or overlay windows at any time.
 
 ---
 
 ### 🧠 Adaptive Dual-Model Routing & Hot Model Detection
-- **Independent Model Assignment**: Use a lightweight, blazing-fast model (e.g., `qwen2.5-coder:14b` or `llama3.2:latest`) for 1-second quick questions, and a heavy reasoning model (e.g., `qwen3.8:27b` or `claude-3-5-sonnet`) for multi-turn conversations.
+- **Independent Model Assignment**: Use a lightweight, blazing-fast model for 1-second quick questions, and a heavy reasoning model for multi-turn conversations.
 - **`🔥 [Hot in Memory]` Auto-Detection**: Automatically detects models already resident in GPU VRAM (`client.ps()`) to eliminate cold-start loading delays.
 - **Smart Memory Eviction**: Automatically sets `keep_alive: 0` on application exit to cleanly unload model weights and free GPU VRAM immediately.
 
@@ -42,6 +43,7 @@ It listens for global hotkeys, performs real-time screen analysis to determine t
 ### 👁️ Computer Vision Spatial Engine & Mixed-DPI Scaling
 - **Clutter Minimization (Canny Edge Convolutions + 2D Integral Images)**: Scans your screen in $O(1)$ box density convolutions to find the cleanest, least-cluttered desktop space (empty wallpaper or blank margins) so the overlay never covers your active work.
 - **4K + 1080p Mixed-DPI Multi-Monitor Precision**: Synchronizes hardware screen capture bounds with Qt logical desktop coordinates (`QScreen.devicePixelRatio()`). Works seamlessly across 4K @ 150%/200% scaling and 1080p @ 100% secondary monitors.
+- **Same-Screen Conversation Locking**: Automatically remembers and stays locked to the exact monitor where the conversation started for all follow-up turns.
 
 ---
 
@@ -49,6 +51,17 @@ It listens for global hotkeys, performs real-time screen analysis to determine t
 - **W3C Relative Luminance Inversion**: Pre-analyzes background pixels directly behind both the **Prompt Input Box** and the **Answer Overlay**:
   - **Over White / Light Screens** (light web pages, PDFs, light themes): Renders a **frosted white glass backing** with **crisp dark slate text (`#0F172A`)**.
   - **Over Dark Screens** (dark IDEs, terminals, dark wallpapers): Renders a **dark obsidian glass backing** with **bright white text (`#F8FAFC`)**.
+
+---
+
+### ✂️ Multimodal Multi-Screen Snipping & Dynamic Vision (`Alt + 3`)
+- **Live Transparent Overlay (Zero Zoom Distortion)**: Displays a native transparent overlay with live cutout preview, maintaining 100% native pixel-perfect resolution on 4K and multi-monitor setups.
+- **Multi-Screenshot Stacking**:
+  - Press `Alt + 3` once to snip a region (`🖼 1 Region (640×480)`).
+  - Press `Alt + 3` again to snip additional regions (`🖼 2 Regions Attached`, `🖼 3 Regions Attached`).
+  - All attached screenshots are sent simultaneously in a single multimodal query.
+- **Dynamic Model Capability Detection**:
+  - Automatically inspects Ollama GGUF model capabilities (`capabilities: ['vision']`, tensor families) and LiteLLM endpoints without requiring static model lists.
 
 ---
 
@@ -122,9 +135,11 @@ python -m uv run pytest
 
 | Hotkey | Action | Behavior |
 |---|---|---|
-| **`Alt + 1`** | **Quick Chat** | Ephemeral query; uses fast model (`num_ctx_quick: 8192`, `keep_alive: 3m`). Auto-promotes on follow-up. |
-| **`Alt + 2`** | **Conversation / Picker** | Resumes active session. Hold and use `↑`/`↓` to switch conversations. |
+| **`Alt + 1`** | **Quick Chat** | Ephemeral query; uses fast model. Auto-promotes on follow-up. |
+| **`Alt + 2`** | **Conversation / Switcher** | Resumes active session. Press `Alt + 2` or `↑`/`↓` to cycle past conversations in real time. |
 | **`Alt + Shift + 2`** | **New Conversation** | Starts a fresh persistent conversation session. |
+| **`Alt + 3`** | **Snip Screen Area** | Interactive transparent region snipper; supports attaching multiple screenshots. |
+| **`Alt + ↑ / ↓`** | **Cycle Conversations** | Switches conversation context across memorized threads. |
 | **`Esc`** | **Dismiss** | Instantly fades out active modal or overlay window. |
 | **Scroll Wheel** | **Scroll Text** | Works anywhere over the screen; automatically pauses auto-close countdown. |
 
@@ -140,6 +155,7 @@ All settings can be configured via the **Setup Wizard** (`--wizard`) or directly
     "quick_chat": "<alt>+1",
     "conversation": "<alt>+2",
     "new_conversation": "<alt>+<shift>+2",
+    "ocr_selection": "<alt>+3",
     "dismiss": "<esc>"
   },
   "provider": {

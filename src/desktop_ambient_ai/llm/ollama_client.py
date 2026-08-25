@@ -58,6 +58,70 @@ class OllamaWorker(BaseLLMWorker):
             return []
 
     @staticmethod
+    def is_model_vision_capable(host: str, model_name: str) -> bool:
+        """Dynamically inspects Ollama model metadata to determine if it has vision capabilities."""
+        try:
+            client = ollama.Client(host=host, timeout=4)
+            info = client.show(model_name)
+            caps = getattr(info, "capabilities", []) or (info.get("capabilities", []) if isinstance(info, dict) else [])
+            if "vision" in caps:
+                return True
+            details = getattr(info, "details", None) or (info.get("details", {}) if isinstance(info, dict) else {})
+            families = getattr(details, "families", []) if hasattr(details, "families") else (details.get("families", []) if isinstance(details, dict) else [])
+            if any("clip" in str(f).lower() or "mllama" in str(f).lower() or "vision" in str(f).lower() or "vl" in str(f).lower() for f in families):
+                return True
+            model_info = getattr(info, "model_info", {}) or (info.get("model_info", {}) if isinstance(info, dict) else {})
+            if any("vision" in str(k).lower() or "clip" in str(k).lower() or "mllama" in str(k).lower() for k in model_info.keys()):
+                return True
+        except Exception:
+            pass
+        return False
+
+    @staticmethod
+    def find_vision_models(host: str = "http://127.0.0.1:11434") -> List[str]:
+        """Discovers any vision-capable models currently installed in Ollama."""
+        vision_models: List[str] = []
+        try:
+            models = OllamaWorker.list_models(host=host)
+            for m in models:
+                name = m.get("name", "")
+                if name and OllamaWorker.is_model_vision_capable(host, name):
+                    vision_models.append(name)
+        except Exception:
+            pass
+        return vision_models
+
+    def _resolve_model(self) -> Optional[str]:
+        """Dynamically determines the model to use from configuration, hot memory, or installed models."""
+        if self._mode == "conversation":
+            model = self.provider_config.model_conversation or self.provider_config.model
+        else:
+            model = self.provider_config.model_quick or self.provider_config.model
+
+        if model:
+            return model
+
+        # Check models currently resident in VRAM
+        running = self.get_running_models(self.provider_config.ollama_host)
+        if running:
+            return running[0]
+
+        # Check installed models in Ollama
+        installed = self.list_models(self.provider_config.ollama_host)
+        if installed:
+            return installed[0].get("name")
+
+        return None
+
+    def is_vision_capable(self, model: Optional[str] = None) -> bool:
+        """Checks if current active model or specified model supports vision."""
+        if not model:
+            model = self._resolve_model()
+        if not model:
+            return False
+        return self.is_model_vision_capable(self.provider_config.ollama_host, model)
+
+    @staticmethod
     def get_running_models(host: str = "http://localhost:11434") -> List[str]:
         """Returns the list of model names currently loaded in memory/VRAM ('hot')."""
         try:
@@ -74,11 +138,30 @@ class OllamaWorker(BaseLLMWorker):
             return []
 
     def run(self) -> None:
-        # Select model based on mode (quick chat vs memorized conversation)
-        if self._mode == "conversation":
-            model = self.provider_config.model_conversation or self.provider_config.model or "llama3.2:latest"
-        else:
-            model = self.provider_config.model_quick or self.provider_config.model or "llama3.2:latest"
+        model = self._resolve_model()
+
+        # If image payload is attached, check vision routing
+        if self._images:
+            if self.provider_config.model_vision:
+                model = self.provider_config.model_vision
+            elif not model or not self.is_model_vision_capable(self.provider_config.ollama_host, model):
+                # Search for any installed vision model in Ollama
+                vision_models = self.find_vision_models(self.provider_config.ollama_host)
+                if vision_models:
+                    model = vision_models[0]
+                else:
+                    self.stream_error.emit(
+                        f"The active model does not support image inputs, and no vision-capable model was found in Ollama.\n"
+                        "Please pull a vision-capable model in Ollama to enable screen region analysis."
+                    )
+                    return
+
+        if not model:
+            self.stream_error.emit(
+                "No local model configured or found in Ollama.\n"
+                "Please install a model using 'ollama pull <model>'."
+            )
+            return
 
         try:
             client = ollama.Client(
@@ -112,9 +195,17 @@ class OllamaWorker(BaseLLMWorker):
                 else self.provider_config.keep_alive_quick
             )
 
+            # Format messages with image payload if present
+            formatted_messages = [dict(m) for m in self._messages]
+            if self._images and formatted_messages:
+                for i in range(len(formatted_messages) - 1, -1, -1):
+                    if formatted_messages[i].get("role") == "user":
+                        formatted_messages[i]["images"] = self._images
+                        break
+
             kwargs: Dict[str, Any] = {
                 "model": model,
-                "messages": self._messages,
+                "messages": formatted_messages,
                 "stream": True,
                 "keep_alive": keep_alive,  # Resets the in-memory retention timer with every query
                 "options": {
@@ -164,4 +255,4 @@ class OllamaWorker(BaseLLMWorker):
 
         except Exception as e:
             if not self.is_cancelled():
-                self.stream_error.emit(str(e))
+                self.stream_error.emit(f"Ollama streaming failed: {str(e)}")

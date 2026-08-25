@@ -3,7 +3,7 @@ version: '3.8'
 services:
   searxng:
     image: docker.io/searxng/searxng:latest
-    container_name: searxng-ambient-ai
+    container_name: searxng-vi-si-on
     ports:
       - "8888:8080"
     environment:

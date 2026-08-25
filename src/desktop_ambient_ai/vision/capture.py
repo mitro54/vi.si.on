@@ -44,7 +44,16 @@ class ScreenCapture:
     """Handles cross-platform monitor enumeration, screenshot capture, and focus detection."""
 
     def __init__(self):
-        self._sct = mss.mss()
+        self._sct = mss.MSS()
+
+    @property
+    def sct(self):
+        return self._sct
+
+    def get_primary_monitor(self) -> MonitorInfo:
+        """Returns the primary monitor info."""
+        monitors = self.get_all_monitors()
+        return monitors[0] if monitors else MonitorInfo(index=1, left=0, top=0, width=1920, height=1080)
 
     def get_all_monitors(self) -> List[MonitorInfo]:
         """Returns individual monitors synchronized with Qt logical space and physical grab bounds."""

@@ -17,19 +17,22 @@ class HotkeyConfig:
     quick_chat: str = "<alt>+1"
     conversation: str = "<alt>+2"
     new_conversation: str = "<alt>+<shift>+2"
+    ocr_selection: str = "<alt>+3"
     dismiss: str = "<esc>"
 
 
 @dataclass
 class ProviderConfig:
     type: Literal["ollama", "litellm"] = "ollama"
-    model: Optional[str] = "llama3.2:latest"
+    model: Optional[str] = None
     model_quick: Optional[str] = None
     model_conversation: Optional[str] = None
+    model_vision: Optional[str] = None
     ollama_host: str = "http://127.0.0.1:11434"
     litellm_model: Optional[str] = None
     litellm_model_quick: Optional[str] = None
     litellm_model_conversation: Optional[str] = None
+    litellm_model_vision: Optional[str] = None
     api_keys: Dict[str, str] = field(default_factory=dict)
     num_ctx: int = 16384
     num_ctx_quick: int = 16384

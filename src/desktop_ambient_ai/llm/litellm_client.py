@@ -27,25 +27,60 @@ class LiteLLMWorker(BaseLLMWorker):
             if val:
                 os.environ[key] = val
 
-    def run(self) -> None:
-        self._setup_api_keys()
+    def _resolve_model(self) -> Optional[str]:
+        """Resolves configured cloud model."""
         if self._mode == "conversation":
-            model = (
+            return (
                 self.provider_config.litellm_model_conversation
                 or self.provider_config.litellm_model
-                or "gpt-4o-mini"
             )
-        else:
-            model = (
-                self.provider_config.litellm_model_quick
-                or self.provider_config.litellm_model
-                or "gpt-4o-mini"
-            )
+        return (
+            self.provider_config.litellm_model_quick
+            or self.provider_config.litellm_model
+        )
+
+    def is_vision_capable(self, model: Optional[str] = None) -> bool:
+        """Checks if configured cloud model supports multimodal vision via LiteLLM."""
+        if not model:
+            model = self.provider_config.litellm_model_vision or self._resolve_model()
+        if not model:
+            return False
+        try:
+            if litellm.supports_vision(model):
+                return True
+        except Exception:
+            pass
+        lower = str(model).lower()
+        return any(k in lower for k in ("vision", "vl", "multimodal", "4o", "claude-3", "gemini"))
+
+    def run(self) -> None:
+        self._setup_api_keys()
+        model = self._resolve_model()
+        if self._images and self.provider_config.litellm_model_vision:
+            model = self.provider_config.litellm_model_vision
+
+        if not model:
+            self.stream_error.emit("No Cloud/LiteLLM model configured. Please specify a model in settings.")
+            return
 
         try:
+            formatted_messages = []
+            for m in self._messages:
+                msg_copy = dict(m)
+                if self._images and msg_copy.get("role") == "user" and m == self._messages[-1]:
+                    content_text = str(msg_copy.get("content", ""))
+                    parts: List[Dict[str, Any]] = [{"type": "text", "text": content_text}]
+                    for img_b64 in self._images:
+                        parts.append({
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{img_b64}"}
+                        })
+                    msg_copy["content"] = parts
+                formatted_messages.append(msg_copy)
+
             kwargs: Dict[str, Any] = {
                 "model": model,
-                "messages": self._messages,
+                "messages": formatted_messages,
                 "stream": True,
                 "timeout": self.provider_config.request_timeout_seconds,
             }

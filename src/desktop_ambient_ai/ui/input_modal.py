@@ -1,12 +1,12 @@
 """
-Clean, floating query input modal with mode indication and smooth fade transitions.
+Clean, floating query input modal with mode indication, multi-image attachments, and smooth fade transitions.
 """
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Any, List, Literal, Optional
 
-from PyQt6.QtCore import QEasingCurve, QPropertyAnimation, QRect, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QRect, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QCursor, QGuiApplication, QKeyEvent
 from PyQt6.QtWidgets import (
     QHBoxLayout,
@@ -52,17 +52,55 @@ def _force_foreground_window(hwnd: int) -> None:
             pass
 
 
+class PromptLineEdit(QLineEdit):
+    """Custom LineEdit that intercepts hotkey combinations to prevent accidental character insertions and enable arrow navigation."""
+
+    alt_ocr_pressed = pyqtSignal()
+    cycle_conv_requested = pyqtSignal(int)  # -1 for prev, +1 for next
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        is_alt = bool(event.modifiers() & Qt.KeyboardModifier.AltModifier)
+
+        # 1. Intercept Alt+1, Alt+2, Alt+3 so numbers are NEVER typed into prompt text
+        if is_alt and event.key() in (Qt.Key.Key_1, Qt.Key.Key_2, Qt.Key.Key_3):
+            event.accept()
+            if event.key() == Qt.Key.Key_3:
+                self.alt_ocr_pressed.emit()
+            elif event.key() == Qt.Key.Key_2:
+                # Repeatedly pressing or holding Alt+2 cycles to the next conversation!
+                self.cycle_conv_requested.emit(1)
+            return
+
+        # 2. Intercept Alt+Up / Alt+Down or Up/Down arrows to cycle conversations
+        if (is_alt and event.key() == Qt.Key.Key_Up) or (not self.text() and event.key() == Qt.Key.Key_Up):
+            event.accept()
+            self.cycle_conv_requested.emit(-1)
+            return
+
+        if (is_alt and event.key() == Qt.Key.Key_Down) or (not self.text() and event.key() == Qt.Key.Key_Down):
+            event.accept()
+            self.cycle_conv_requested.emit(1)
+            return
+
+        super().keyPressEvent(event)
+
+
 class InputModal(QWidget):
     """Floating modal prompt to receive user queries."""
 
     query_submitted = pyqtSignal(str, str)  # (query_text, mode)
     dismissed = pyqtSignal()
+    ocr_requested = pyqtSignal()
+    cycle_conv_requested = pyqtSignal(int)  # -1 for prev, +1 for next
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.mode: Literal["quick", "conversation"] = "quick"
         self.turn_count: int = 1
         self._anim: Optional[QPropertyAnimation] = None
+        self._attached_images: List[str] = []
+        self._attached_metadata: List[tuple[int, int]] = []
+        self.theme: Optional[Any] = None
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -74,37 +112,89 @@ class InputModal(QWidget):
         self.setObjectName("InputModalRoot")
         self.setStyleSheet(generate_input_modal_qss())
 
-        self.setFixedSize(540, 100)
+        self.setFixedSize(540, 110)
         self._init_ui()
 
     def _init_ui(self) -> None:
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(14, 12, 14, 12)
-        main_layout.setSpacing(8)
+        main_layout.setContentsMargins(14, 10, 14, 10)
+        main_layout.setSpacing(6)
 
-        # Top Bar: Mode Badge + Shortcuts Hint
+        # Top Bar: Mode Badge + Attached Image Chip + Shortcuts Hint
         top_bar = QHBoxLayout()
         top_bar.setContentsMargins(0, 0, 0, 0)
+        top_bar.setSpacing(8)
 
         self.mode_badge = QLabel("⚡ Quick Query", self)
         self.mode_badge.setObjectName("ModeBadge")
         top_bar.addWidget(self.mode_badge)
 
+        # Region Image Attachment Pill Chip
+        self.img_chip = QLabel("🖼 Region Attached", self)
+        self.img_chip.setObjectName("ImageChip")
+        self.img_chip.setStyleSheet(
+            "background-color: rgba(16, 185, 129, 0.2); color: #34D399; "
+            "border: 1px solid rgba(16, 185, 129, 0.4); border-radius: 4px; padding: 2px 6px; font-size: 11px; font-weight: bold;"
+        )
+        self.img_chip.hide()
+        top_bar.addWidget(self.img_chip)
+
         top_bar.addStretch()
 
-        self.hint_label = QLabel("Enter to submit • Esc to close", self)
+        self.hint_label = QLabel("Enter to submit • Alt+2 / ↑↓ switch • Alt+3 snip • Esc", self)
         self.hint_label.setObjectName("HintLabel")
         top_bar.addWidget(self.hint_label)
 
         main_layout.addLayout(top_bar)
 
         # Bottom: Text Input
-        self.input_edit = QLineEdit(self)
+        self.input_edit = PromptLineEdit(self)
         self.input_edit.setObjectName("PromptInput")
         self.input_edit.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.input_edit.setPlaceholderText("Ask anything (Ollama / Web / Knowledge Base)...")
+        self.input_edit.setPlaceholderText("Ask anything (or press Alt+3 to select a screen area)...")
         self.input_edit.returnPressed.connect(self._on_submit)
+        self.input_edit.alt_ocr_pressed.connect(self.ocr_requested.emit)
+        self.input_edit.cycle_conv_requested.connect(self.cycle_conv_requested.emit)
         main_layout.addWidget(self.input_edit)
+
+    def attach_image_snip(self, b64_png: str, width: int, height: int, is_vision_capable: bool = True) -> None:
+        """Attaches a snipped screen image to the active prompt. Supports multiple images."""
+        self._attached_images.append(b64_png)
+        self._attached_metadata.append((width, height))
+
+        total = len(self._attached_images)
+        if is_vision_capable:
+            if total == 1:
+                self.img_chip.setText(f"🖼 1 Region ({width}×{height})")
+            else:
+                self.img_chip.setText(f"🖼 {total} Regions Attached")
+            self.img_chip.setStyleSheet(
+                "background-color: rgba(16, 185, 129, 0.2); color: #34D399; "
+                "border: 1px solid rgba(16, 185, 129, 0.4); border-radius: 4px; padding: 2px 6px; font-size: 11px; font-weight: bold;"
+            )
+        else:
+            self.img_chip.setText(f"⚠️ Model lacks vision ({total} attached)")
+            self.img_chip.setStyleSheet(
+                "background-color: rgba(245, 158, 11, 0.2); color: #FBBF24; "
+                "border: 1px solid rgba(245, 158, 11, 0.4); border-radius: 4px; padding: 2px 6px; font-size: 11px; font-weight: bold;"
+            )
+        self.img_chip.show()
+        self.input_edit.setPlaceholderText("Ask a question about the snipped screen area(s)...")
+
+    def detach_image(self) -> None:
+        """Clears all attached images."""
+        self._attached_images.clear()
+        self._attached_metadata.clear()
+        self.img_chip.hide()
+        self.input_edit.setPlaceholderText("Ask anything (or press Alt+3 to select a screen area)...")
+
+    def get_attached_image(self) -> Optional[str]:
+        """Returns the primary attached image, if any."""
+        return self._attached_images[0] if self._attached_images else None
+
+    def get_attached_images(self) -> List[str]:
+        """Returns all attached image payloads."""
+        return list(self._attached_images)
 
     def set_mode(self, mode: Literal["quick", "conversation"], turn_count: int = 1, title: Optional[str] = None) -> None:
         """Updates modal visual mode and context labels."""
@@ -147,38 +237,52 @@ class InputModal(QWidget):
                     "background-color: rgba(147, 51, 234, 0.12); color: #7E22CE; border: 1px solid rgba(147, 51, 234, 0.28);"
                 )
 
-    def show_modal(self, monitor: Optional[Any] = None, placement: str = "cursor", theme: Optional[Any] = None) -> None:
+    def show_modal(
+        self,
+        monitor: Optional[Any] = None,
+        placement: str = "cursor",
+        theme: Optional[Any] = None,
+        clear_text: bool = True,
+        exact_pos: Optional[QPoint] = None,
+    ) -> None:
         """Positions modal based on user placement preference ('cursor' or 'center') and target monitor."""
         if theme:
             self.apply_theme(theme)
-        if placement == "center" and monitor:
-            target_x = monitor.left + (monitor.width - self.width()) // 2
-            target_y = monitor.top + (monitor.height - self.height()) // 2
-        elif placement == "center":
-            cursor_pos = QCursor.pos()
-            screen = QGuiApplication.screenAt(cursor_pos) or QGuiApplication.primaryScreen()
-            geo = screen.geometry() if screen else QRect(0, 0, 1920, 1080)
-            target_x = geo.left() + (geo.width() - self.width()) // 2
-            target_y = geo.top() + (geo.height() - self.height()) // 2
-        else:
-            cursor_pos = QCursor.pos()
-            target_x = cursor_pos.x() - self.width() // 2
-            target_y = cursor_pos.y() - self.height() // 2
 
-        # Clamp inside target monitor or active screen
-        margin = 24
-        if monitor:
-            clamped_x = max(monitor.left + margin, min(target_x, monitor.right - self.width() - margin))
-            clamped_y = max(monitor.top + margin, min(target_y, monitor.bottom - self.height() - margin))
+        if exact_pos:
+            clamped_x, clamped_y = exact_pos.x(), exact_pos.y()
         else:
-            cursor_pos = QCursor.pos()
-            screen = QGuiApplication.screenAt(cursor_pos) or QGuiApplication.primaryScreen()
-            geo = screen.geometry() if screen else QRect(0, 0, 1920, 1080)
-            clamped_x = max(geo.left() + margin, min(target_x, geo.right() - self.width() - margin))
-            clamped_y = max(geo.top() + margin, min(target_y, geo.bottom() - self.height() - margin))
+            if placement == "center" and monitor:
+                target_x = monitor.left + (monitor.width - self.width()) // 2
+                target_y = monitor.top + (monitor.height - self.height()) // 2
+            elif placement == "center":
+                cursor_pos = QCursor.pos()
+                screen = QGuiApplication.screenAt(cursor_pos) or QGuiApplication.primaryScreen()
+                geo = screen.geometry() if screen else QRect(0, 0, 1920, 1080)
+                target_x = geo.left() + (geo.width() - self.width()) // 2
+                target_y = geo.top() + (geo.height() - self.height()) // 2
+            else:
+                cursor_pos = QCursor.pos()
+                target_x = cursor_pos.x() - self.width() // 2
+                target_y = cursor_pos.y() - self.height() // 2
+
+            # Clamp inside target monitor or active screen
+            margin = 24
+            if monitor:
+                clamped_x = max(monitor.left + margin, min(target_x, monitor.right - self.width() - margin))
+                clamped_y = max(monitor.top + margin, min(target_y, monitor.bottom - self.height() - margin))
+            else:
+                cursor_pos = QCursor.pos()
+                screen = QGuiApplication.screenAt(cursor_pos) or QGuiApplication.primaryScreen()
+                geo = screen.geometry() if screen else QRect(0, 0, 1920, 1080)
+                clamped_x = max(geo.left() + margin, min(target_x, geo.right() - self.width() - margin))
+                clamped_y = max(geo.top() + margin, min(target_y, geo.bottom() - self.height() - margin))
 
         self.move(clamped_x, clamped_y)
-        self.input_edit.clear()
+        if clear_text:
+            self.input_edit.clear()
+            self.detach_image()
+
         self.setWindowOpacity(0.0)
         self.show()
         self.raise_()
@@ -215,6 +319,8 @@ class InputModal(QWidget):
 
     def _on_submit(self) -> None:
         text = self.input_edit.text().strip()
+        if not text and self._attached_images:
+            text = "Describe and analyze the attached screen region(s) in detail."
         if text:
             self.hide()
             self.query_submitted.emit(text, self.mode)

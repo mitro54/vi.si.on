@@ -112,8 +112,8 @@ class ConversationStore:
                 CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_at DESC);
             """)
 
-    def create_session(self, mode: Literal["quick", "persistent"] = "quick") -> ConversationSession:
-        session = ConversationSession(mode=mode, _store=self)
+    def create_session(self, mode: Literal["quick", "persistent"] = "quick", title: str = "New Conversation") -> ConversationSession:
+        session = ConversationSession(mode=mode, title=title, _store=self)
         if mode == "persistent":
             self.save_session(session)
         return session

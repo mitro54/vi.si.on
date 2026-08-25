@@ -11,7 +11,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 
 import numpy as np
-from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QObject, QPoint, QRect, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QCursor
 from PyQt6.QtWidgets import QApplication
 
@@ -25,6 +25,7 @@ from .ui.conversation_picker import ConversationPicker
 from .ui.input_modal import InputModal
 from .ui.overlay_view import OverlayView
 from .ui.setup_wizard import SetupWizard
+from .ui.snip_overlay import ScreenSnipper
 from .vision.capture import MonitorInfo, ScreenCapture
 from .vision.spatial_finder import SpatialFinder, SpatialResult
 
@@ -44,8 +45,10 @@ class Orchestrator(QObject):
     _sig_quick_chat = pyqtSignal()
     _sig_conversation = pyqtSignal()
     _sig_new_conversation = pyqtSignal()
+    _sig_ocr_selection = pyqtSignal()
     _sig_dismiss = pyqtSignal()
     _sig_global_scroll = pyqtSignal(int)
+    _sig_cycle_conv = pyqtSignal(int)
 
     def __init__(
         self,
@@ -65,6 +68,7 @@ class Orchestrator(QObject):
         self._current_session: Optional[ConversationSession] = None
         self._last_quick_session: Optional[ConversationSession] = None
         self._promotion_deadline: float = 0.0
+        self._snipping_from_modal: bool = False
 
         # Subsystems
         self.capture = ScreenCapture()
@@ -74,12 +78,14 @@ class Orchestrator(QObject):
         self.input_modal = InputModal()
         self.overlay_view = OverlayView(config)
         self.conversation_picker = ConversationPicker(store)
+        self.screen_snipper = ScreenSnipper(capture_engine=self.capture)
 
         # LLM Worker
         self.llm_worker: BaseLLMWorker = create_llm_worker(config.provider, parent=self)
 
         self._active_prompt_monitor: Optional[MonitorInfo] = None
         self._active_prompt_rect: Optional[Any] = None
+        self._last_session_monitor: Optional[MonitorInfo] = None
 
         self._setup_signals()
         self._start_input_listeners()
@@ -89,12 +95,19 @@ class Orchestrator(QObject):
         self._sig_quick_chat.connect(self.trigger_quick_chat)
         self._sig_conversation.connect(self.trigger_conversation)
         self._sig_new_conversation.connect(self.trigger_new_conversation)
+        self._sig_ocr_selection.connect(self.trigger_ocr_selection)
         self._sig_dismiss.connect(self.dismiss)
         self._sig_global_scroll.connect(self.overlay_view.scroll_by_delta)
+        self._sig_cycle_conv.connect(self.cycle_conversation)
+
+        # Screen Snipper events
+        self.screen_snipper.region_selected.connect(self.on_region_snipped)
+        self.screen_snipper.cancelled.connect(self.on_snip_cancelled)
 
         # Input modal events
         self.input_modal.query_submitted.connect(self.on_query_submitted)
         self.input_modal.dismissed.connect(self.on_input_dismissed)
+        self.input_modal.cycle_conv_requested.connect(self.cycle_conversation)
 
         # Overlay events
         self.overlay_view.dismissed.connect(self.on_overlay_dismissed)
@@ -118,7 +131,10 @@ class Orchestrator(QObject):
                 self.config.hotkeys.quick_chat: lambda: self._sig_quick_chat.emit(),
                 self.config.hotkeys.conversation: lambda: self._sig_conversation.emit(),
                 self.config.hotkeys.new_conversation: lambda: self._sig_new_conversation.emit(),
+                self.config.hotkeys.ocr_selection: lambda: self._sig_ocr_selection.emit(),
                 self.config.hotkeys.dismiss: lambda: self._sig_dismiss.emit(),
+                "<alt>+<up>": lambda: self._sig_cycle_conv.emit(-1),
+                "<alt>+<down>": lambda: self._sig_cycle_conv.emit(1),
             }
 
             self._hotkey_listener = keyboard.GlobalHotKeys(hotkeys_map)
@@ -150,33 +166,44 @@ class Orchestrator(QObject):
             return alternates[0] if alternates else focused_monitor
         return focused_monitor
 
-    def _show_input_prompt(self, mode: str = "quick", turn_count: int = 1, title: Optional[str] = None) -> None:
+    def _show_input_prompt(
+        self,
+        mode: str = "quick",
+        turn_count: int = 1,
+        title: Optional[str] = None,
+        clear_text: bool = True,
+        target_monitor: Optional[MonitorInfo] = None,
+        exact_pos: Optional[QPoint] = None,
+    ) -> None:
         """Helper to show modal with user configured placement, screen target, and adaptive luminance contrast."""
         self.state = AppState.INPUT_ACTIVE
         self.input_modal.set_mode(mode, turn_count=turn_count, title=title)
-        target_mon = self._get_target_monitor()
+        target_mon = target_monitor or self._get_target_monitor()
         self._active_prompt_monitor = target_mon
 
         # Compute anticipated modal coordinates to analyze background luminance
         modal_w, modal_h = self.input_modal.width(), self.input_modal.height()
         placement = self.config.overlay.prompt_placement
 
-        if placement == "center" and target_mon:
+        if exact_pos:
+            clamped_x, clamped_y = exact_pos.x(), exact_pos.y()
+        elif placement == "center" and target_mon:
             target_x = target_mon.left + (target_mon.width - modal_w) // 2
             target_y = target_mon.top + (target_mon.height - modal_h) // 2
+            margin = 24
+            clamped_x = max(target_mon.left + margin, min(target_x, target_mon.right - modal_w - margin))
+            clamped_y = max(target_mon.top + margin, min(target_y, target_mon.bottom - modal_h - margin))
         else:
             try:
-                from PyQt6.QtGui import QCursor
                 c_pos = QCursor.pos()
                 target_x = c_pos.x() - modal_w // 2
                 target_y = c_pos.y() - modal_h // 2
             except Exception:
                 target_x = target_mon.left + (target_mon.width - modal_w) // 2
                 target_y = target_mon.top + (target_mon.height - modal_h) // 2
-
-        margin = 24
-        clamped_x = max(target_mon.left + margin, min(target_x, target_mon.right - modal_w - margin))
-        clamped_y = max(target_mon.top + margin, min(target_y, target_mon.bottom - modal_h - margin))
+            margin = 24
+            clamped_x = max(target_mon.left + margin, min(target_x, target_mon.right - modal_w - margin))
+            clamped_y = max(target_mon.top + margin, min(target_y, target_mon.bottom - modal_h - margin))
 
         # Capture background pixels directly behind the prompt box to determine contrast polarity
         theme = None
@@ -192,7 +219,13 @@ class Orchestrator(QObject):
         except Exception:
             pass
 
-        self.input_modal.show_modal(monitor=target_mon, placement=placement, theme=theme)
+        self.input_modal.show_modal(
+            monitor=target_mon,
+            placement=placement,
+            theme=theme,
+            clear_text=clear_text,
+            exact_pos=exact_pos,
+        )
         self._active_prompt_rect = self.input_modal.geometry()
 
     @pyqtSlot()
@@ -215,7 +248,8 @@ class Orchestrator(QObject):
             self._last_quick_session.promote_to_persistent()
             self._current_session = self._last_quick_session
             turn_count = len([m for m in self._current_session.messages if m.get("role") == "user"]) + 1
-            self._show_input_prompt(mode="conversation", turn_count=turn_count, title="Follow-up")
+            followup_mon = self._last_session_monitor or self._active_prompt_monitor
+            self._show_input_prompt(mode="conversation", turn_count=turn_count, title="Follow-up", target_monitor=followup_mon)
         else:
             self._current_session = self.store.create_session(mode="quick")
             self._last_quick_session = self._current_session
@@ -233,7 +267,8 @@ class Orchestrator(QObject):
         if latest:
             self._current_session = latest
             turn_count = len([m for m in latest.messages if m.get("role") == "user"]) + 1
-            self._show_input_prompt(mode="conversation", turn_count=turn_count, title=latest.title)
+            followup_mon = self._last_session_monitor or self._active_prompt_monitor
+            self._show_input_prompt(mode="conversation", turn_count=turn_count, title=latest.title, target_monitor=followup_mon)
         else:
             self._current_session = self.store.create_session(mode="persistent")
             self._show_input_prompt(mode="conversation", turn_count=1, title="New Conversation")
@@ -242,7 +277,120 @@ class Orchestrator(QObject):
     def trigger_new_conversation(self) -> None:
         """Handles Alt+Shift+2: starts a brand new persistent conversation."""
         self._current_session = self.store.create_session(mode="persistent")
+        self._last_session_monitor = None
         self._show_input_prompt(mode="conversation", turn_count=1, title="New Conversation")
+
+    @pyqtSlot()
+    def trigger_ocr_selection(self) -> None:
+        """Handles Alt+3 trigger for interactive screen region snipping."""
+        if self.screen_snipper.isVisible():
+            self.screen_snipper._cancel()
+            return
+
+        if self.input_modal.isVisible():
+            self._snipping_from_modal = True
+            self._saved_prompt_pos = self.input_modal.pos()
+            self._saved_prompt_monitor = self._active_prompt_monitor
+            # If a trailing '3' was accidentally captured in the text input, clean it
+            txt = self.input_modal.input_edit.text()
+            if txt.endswith("3"):
+                self.input_modal.input_edit.setText(txt[:-1])
+            self.input_modal.hide()
+        else:
+            self._snipping_from_modal = False
+            self._saved_prompt_pos = None
+            self._saved_prompt_monitor = None
+
+        self.screen_snipper.start_selection()
+
+    @pyqtSlot(bytes, str, object, QRect)
+    def on_region_snipped(self, png_bytes: bytes, b64_png: str, crop_bgr: Any, rect: QRect) -> None:
+        """Attaches snipped image to active or newly opened prompt box."""
+        is_capable = self.llm_worker.is_vision_capable()
+        if not is_capable:
+            vision_models = self.llm_worker.find_vision_models()
+            is_capable = bool(vision_models)
+
+        self.input_modal.attach_image_snip(b64_png, rect.width(), rect.height(), is_vision_capable=is_capable)
+
+        if self._snipping_from_modal:
+            self._show_input_prompt(
+                mode=self.input_modal.mode,
+                turn_count=self.input_modal.turn_count,
+                clear_text=False,
+                target_monitor=self._saved_prompt_monitor,
+                exact_pos=self._saved_prompt_pos,
+            )
+        else:
+            now = time.monotonic()
+            is_followup = bool(
+                self._last_quick_session
+                and (self.overlay_view.isVisible() or now < self._promotion_deadline)
+            )
+            if is_followup and self._last_quick_session:
+                self._last_quick_session.promote_to_persistent()
+                self._current_session = self._last_quick_session
+                turn_count = len([m for m in self._current_session.messages if m.get("role") == "user"]) + 1
+                self._show_input_prompt(mode="conversation", turn_count=turn_count, title="Follow-up", clear_text=False)
+            else:
+                self._current_session = self.store.create_session(mode="quick")
+                self._last_quick_session = self._current_session
+                self._show_input_prompt(mode="quick", turn_count=1, clear_text=False)
+
+    @pyqtSlot()
+    def on_snip_cancelled(self) -> None:
+        """Restores modal if snipper is cancelled."""
+        if self._snipping_from_modal:
+            self._show_input_prompt(
+                mode=self.input_modal.mode,
+                turn_count=self.input_modal.turn_count,
+                clear_text=False,
+                target_monitor=self._saved_prompt_monitor,
+                exact_pos=self._saved_prompt_pos,
+            )
+        else:
+            self.state = AppState.IDLE
+
+    @pyqtSlot(int)
+    def cycle_conversation(self, delta: int) -> None:
+        """Cycles through past persistent conversation sessions in real time."""
+        if self.conversation_picker.isVisible():
+            if delta > 0:
+                self.conversation_picker.select_next()
+            else:
+                self.conversation_picker.select_previous()
+            return
+
+        summaries = self.store.list_persistent(limit=30)
+        if not summaries:
+            return
+
+        current_idx = 0
+        if self._current_session and self._current_session.mode == "persistent":
+            for idx, s in enumerate(summaries):
+                if s.id == self._current_session.id:
+                    current_idx = idx
+                    break
+            next_idx = (current_idx + delta) % len(summaries)
+        else:
+            next_idx = 0 if delta >= 0 else len(summaries) - 1
+
+        target_summary = summaries[next_idx]
+        session = self.store.get_session(target_summary.id)
+        if session:
+            self._current_session = session
+            turn_count = len([m for m in session.messages if m.get("role") == "user"]) + 1
+            if self.input_modal.isVisible():
+                self.input_modal.set_mode("conversation", turn_count=turn_count, title=session.title)
+            else:
+                followup_mon = self._last_session_monitor or self._active_prompt_monitor
+                self._show_input_prompt(
+                    mode="conversation",
+                    turn_count=turn_count,
+                    title=session.title,
+                    clear_text=False,
+                    target_monitor=followup_mon,
+                )
 
     @pyqtSlot()
     def show_conversation_picker(self) -> None:
@@ -256,7 +404,8 @@ class Orchestrator(QObject):
         if session:
             self._current_session = session
             turn_count = len([m for m in session.messages if m.get("role") == "user"]) + 1
-            self._show_input_prompt(mode="conversation", turn_count=turn_count, title=session.title)
+            followup_mon = self._last_session_monitor or self._active_prompt_monitor
+            self._show_input_prompt(mode="conversation", turn_count=turn_count, title=session.title, target_monitor=followup_mon)
 
     @pyqtSlot()
     def on_picker_dismissed(self) -> None:
@@ -267,6 +416,9 @@ class Orchestrator(QObject):
         """Dismisses any active input modal or floating overlay."""
         if self.llm_worker.isRunning():
             self.llm_worker.cancel()
+
+        if self.screen_snipper.isVisible():
+            self.screen_snipper.hide()
 
         if self.input_modal.isVisible():
             self.input_modal.hide()
@@ -294,8 +446,12 @@ class Orchestrator(QObject):
             and len([m for m in self._current_session.messages if m.get("role") == "user"]) > 0
         )
 
+        attached_imgs = self.input_modal.get_attached_images()
+        self.input_modal.detach_image()
+
         # 1. Screen Capture: Lock strictly to the EXACT monitor where the prompt was displayed
         target_monitor = self._active_prompt_monitor or self._get_target_monitor()
+        self._last_session_monitor = target_monitor
         frame = self.capture.capture_monitor(target_monitor)
 
         # Check exclusive fullscreen game safety
@@ -323,7 +479,12 @@ class Orchestrator(QObject):
 
         # 5. Start LLM Streaming
         self.state = AppState.STREAMING
-        self.llm_worker.start_stream(messages_payload, tools=tools if tools else None, mode=effective_mode)
+        self.llm_worker.start_stream(
+            messages_payload,
+            tools=tools if tools else None,
+            mode=effective_mode,
+            images=attached_imgs if attached_imgs else None,
+        )
 
     def _select_target_monitor_and_frame(self) -> tuple[MonitorInfo, np.ndarray]:
         """Chooses target monitor (based on screen_target preference) and takes capture."""

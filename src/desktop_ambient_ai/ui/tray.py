@@ -17,6 +17,7 @@ class SystemTrayManager(QObject):
     quick_chat_requested = pyqtSignal()
     conversation_requested = pyqtSignal()
     new_conversation_requested = pyqtSignal()
+    snip_requested = pyqtSignal()
     settings_requested = pyqtSignal()
     quit_requested = pyqtSignal()
 
@@ -67,6 +68,10 @@ class SystemTrayManager(QObject):
         act_new_conv = QAction("➕ New Conversation (Alt+Shift+2)", self)
         act_new_conv.triggered.connect(self.new_conversation_requested.emit)
         menu.addAction(act_new_conv)
+
+        act_snip = QAction("✂ Snip Screen Area (Alt+3)", self)
+        act_snip.triggered.connect(self.snip_requested.emit)
+        menu.addAction(act_snip)
 
         menu.addSeparator()
 
