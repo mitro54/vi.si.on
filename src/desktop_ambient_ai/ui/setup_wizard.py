@@ -336,12 +336,45 @@ class DisplaySettingsPage(QWizardPage):
         p_box.addWidget(QLabel("Prompt Box Location:", pos_group))
         self.prompt_pos_combo = QComboBox(pos_group)
         self.prompt_pos_combo.addItems([
+            "Center of screen (Recommended)",
             "Near mouse cursor",
-            "Center of screen"
+            "Clearest screen area (Automatic AI scan)"
         ])
-        self.prompt_pos_combo.setCurrentIndex(1 if self.config.overlay.prompt_placement == "center" else 0)
+        if self.config.overlay.prompt_placement == "cursor":
+            self.prompt_pos_combo.setCurrentIndex(1)
+        elif self.config.overlay.prompt_placement == "clearest_area":
+            self.prompt_pos_combo.setCurrentIndex(2)
+        else:
+            self.prompt_pos_combo.setCurrentIndex(0)
         p_box.addWidget(self.prompt_pos_combo)
         pos_layout.addLayout(p_box)
+
+        # Clutter Avoidance Toggle & Fallback
+        c_box = QHBoxLayout()
+        self.clutter_avoid_cb = QCheckBox("Enable Clutter Avoidance", pos_group)
+        self.clutter_avoid_cb.setToolTip("Automatically shifts prompt modal away from dense code or background text.")
+        self.clutter_avoid_cb.setChecked(getattr(self.config.overlay, "prompt_clutter_avoidance", True))
+        c_box.addWidget(self.clutter_avoid_cb)
+
+        c_box.addWidget(QLabel("Fallback:", pos_group))
+        self.fallback_combo = QComboBox(pos_group)
+        self.fallback_combo.addItems([
+            "Check mouse cursor, then scan",
+            "Direct spatial scan (Skip mouse)",
+            "Check screen center, then scan",
+            "None (Strictly lock position)"
+        ])
+        fb_val = getattr(self.config.overlay, "prompt_fallback", "cursor")
+        if fb_val == "spatial":
+            self.fallback_combo.setCurrentIndex(1)
+        elif fb_val == "center":
+            self.fallback_combo.setCurrentIndex(2)
+        elif fb_val == "none":
+            self.fallback_combo.setCurrentIndex(3)
+        else:
+            self.fallback_combo.setCurrentIndex(0)
+        c_box.addWidget(self.fallback_combo)
+        pos_layout.addLayout(c_box)
 
         # Answer Placement
         a_box = QHBoxLayout()
@@ -578,7 +611,17 @@ class SetupWizard(QWizard):
         # Placement configs
         self.config.overlay.screen_target = "alternate_screen" if d_page.screen_target_combo.currentIndex() == 1 else "same_screen"
         self.config.overlay.prefer_alternate_monitor = (self.config.overlay.screen_target == "alternate_screen")
-        self.config.overlay.prompt_placement = "center" if d_page.prompt_pos_combo.currentIndex() == 1 else "cursor"
+
+        p_idx = d_page.prompt_pos_combo.currentIndex()
+        self.config.overlay.prompt_placement = (
+            "center" if p_idx == 0 else ("cursor" if p_idx == 1 else "clearest_area")
+        )
+        self.config.overlay.prompt_clutter_avoidance = d_page.clutter_avoid_cb.isChecked()
+
+        fb_idx = d_page.fallback_combo.currentIndex()
+        self.config.overlay.prompt_fallback = (
+            "cursor" if fb_idx == 0 else ("spatial" if fb_idx == 1 else ("center" if fb_idx == 2 else "none"))
+        )
 
         ans_idx = d_page.answer_pos_combo.currentIndex()
         if ans_idx == 1:

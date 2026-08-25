@@ -276,6 +276,34 @@ All settings can be configured via the **Setup Wizard** (`--wizard`) or directly
 }
 ```
 
+### Configuration Options Guide
+
+| Section | Parameter | Default | Description |
+|---|---|---|---|
+| **`provider`** | `type` | `"ollama"` | Inference backend: `"ollama"` for local models, `"litellm"` for cloud APIs (OpenAI, Anthropic, Gemini, Groq). |
+| | `model_quick` | `"qwen2.5-coder:14b"` | Lightweight model for `Alt + 1` ephemeral 1-second queries. |
+| | `model_conversation` | `"qwen3.8:27b"` | Deep reasoning model with memory context for `Alt + 2` conversations. |
+| | `num_ctx_quick` | `8192` | KV cache context window tokens for fast queries. |
+| | `num_ctx_conversation` | `16384` | KV cache context window tokens for multi-turn conversations. |
+| | `keep_alive_quick` | `"3m"` | Duration to keep quick model loaded in GPU VRAM after a query. |
+| | `keep_alive_conversation` | `"10m"` | Duration to keep conversation model loaded in GPU VRAM. |
+| **`overlay`** | `prompt_placement` | `"center"` | Where the prompt box opens: `"center"`, `"cursor"`, or `"clearest_area"`. |
+| | `prompt_clutter_avoidance` | `true` | When `true`, automatically shifts modal away from dense background code/text. |
+| | `prompt_fallback` | `"cursor"` | Fallback if preferred spot is busy: `"cursor"` (mouse area), `"spatial"` (direct scan), `"center"`, or `"none"`. |
+| | `answer_placement` | `"clearest_area"` | Where the answer box renders: `"clearest_area"` (AI spatial scan), `"center"`, or `"cursor"`. |
+| | `screen_target` | `"same_screen"` | Monitor destination: `"same_screen"` (active monitor) or `"alternate_screen"` (secondary display). |
+| | `auto_close` | `"timer"` | Dismiss behavior: `"timer"` (countdown after generation), `"manual"` (Esc only), or `"immediate"`. |
+| | `auto_close_seconds` | `15` | Seconds before answer window closes automatically (scrolling pauses countdown). |
+| | `min_width` / `min_height` | `400` / `280` | Minimum bounding box in logical pixels. |
+| **`conversation`**| `promotion_timeout_seconds` | `15` | Grace window in seconds where follow-up `Alt + 1` queries are auto-promoted into conversations. |
+| | `persist_to_disk` | `true` | Automatically saves and restores conversation threads across app restarts. |
+| **`typography`** | `font_base_size` | `15` | Starting font size in points for short answers. |
+| | `font_min_size` | `13` | Minimum readable floor size; answers will never scale smaller than this floor. |
+| **`web_search`** | `enabled` | `false` | Enables private web search tool calling via SearXNG. |
+| | `searxng_url` | `"http://localhost:8888"` | URL of your local or remote SearXNG instance. |
+| **`knowledge_base`**| `enabled` | `false` | Enables local ChromaDB retrieval-augmented generation (RAG). |
+| | `watch_directory` | `null` | Absolute folder path to watch and automatically index markdown/text documents. |
+
 ---
 
 ## 🐳 Optional: Local SearXNG Web Search
