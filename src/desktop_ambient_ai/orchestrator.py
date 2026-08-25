@@ -230,7 +230,7 @@ class Orchestrator(QObject):
 
     @pyqtSlot()
     def trigger_quick_chat(self) -> None:
-        """Handles Alt+1 trigger for quick query with immediate promotion upon opening."""
+        """Handles Alt+1 trigger for quick query. Retains fast model & warm KV cache across quick follow-ups."""
         if self.state == AppState.INPUT_ACTIVE:
             self.input_modal.hide()
             self.state = AppState.IDLE
@@ -243,13 +243,16 @@ class Orchestrator(QObject):
         )
 
         if is_followup and self._last_quick_session:
-            # Promote previous quick session immediately upon reopening the prompt box!
-            # This ensures the user has unlimited time to type their follow-up without timer pressure.
-            self._last_quick_session.promote_to_persistent()
+            # Keep on fast quick model with existing KV cache / context window for instant follow-up response!
             self._current_session = self._last_quick_session
             turn_count = len([m for m in self._current_session.messages if m.get("role") == "user"]) + 1
             followup_mon = self._last_session_monitor or self._active_prompt_monitor
-            self._show_input_prompt(mode="conversation", turn_count=turn_count, title="Follow-up", target_monitor=followup_mon)
+            self._show_input_prompt(
+                mode="quick",
+                turn_count=turn_count,
+                title="Quick Follow-up",
+                target_monitor=followup_mon,
+            )
         else:
             self._current_session = self.store.create_session(mode="quick")
             self._last_quick_session = self._current_session
@@ -257,10 +260,23 @@ class Orchestrator(QObject):
 
     @pyqtSlot()
     def trigger_conversation(self) -> None:
-        """Handles Alt+2 trigger: opens active persistent conversation or picker."""
+        """Handles Alt+2 trigger: opens active persistent conversation or promotes quick chat with deep reasoning model."""
         if self.state == AppState.INPUT_ACTIVE:
             self.input_modal.hide()
             self.state = AppState.IDLE
+            return
+
+        # If user was in a quick session and explicitly presses Alt+2: promote to persistent & load deep model!
+        if self._last_quick_session and self._current_session == self._last_quick_session and self._current_session.mode == "quick":
+            self._last_quick_session.promote_to_persistent()
+            turn_count = len([m for m in self._current_session.messages if m.get("role") == "user"]) + 1
+            followup_mon = self._last_session_monitor or self._active_prompt_monitor
+            self._show_input_prompt(
+                mode="conversation",
+                turn_count=turn_count,
+                title=self._last_quick_session.title,
+                target_monitor=followup_mon,
+            )
             return
 
         latest = self.store.get_latest_persistent()

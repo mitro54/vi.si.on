@@ -201,10 +201,13 @@ class InputModal(QWidget):
         self.mode = mode
         self.turn_count = turn_count
         if mode == "quick":
-            self.mode_badge.setText("⚡ Quick One-Off")
+            if turn_count > 1:
+                self.mode_badge.setText(f"⚡ Quick Follow-up (#{turn_count})")
+            else:
+                self.mode_badge.setText("⚡ Quick One-Off")
         else:
             conv_label = f"🗨 Conversation (#{turn_count})"
-            if title and title != "New Conversation":
+            if title and title not in ("New Conversation", "Follow-up", "Quick Follow-up"):
                 conv_label = f"🗨 {title[:25]} (#{turn_count})"
             self.mode_badge.setText(conv_label)
         self._refresh_badge_style()

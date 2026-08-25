@@ -16,7 +16,7 @@ from PyQt6.QtCore import (
     QTimer,
     pyqtSignal,
 )
-from PyQt6.QtGui import QFont, QTextCursor, QWheelEvent
+from PyQt6.QtGui import QFont, QGuiApplication, QTextCursor, QTextOption, QWheelEvent
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -96,6 +96,13 @@ class OverlayView(QWidget):
         self.content_edit.setObjectName("ContentDisplay")
         self.content_edit.setReadOnly(True)
         self.content_edit.setAcceptRichText(True)
+        self.content_edit.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        self.content_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.content_edit.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        opt = QTextOption()
+        opt.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+        self.content_edit.document().setDefaultTextOption(opt)
+        self.content_edit.document().setDocumentMargin(8)
         self.content_edit.setMouseTracking(True)
         self.content_edit.viewport().setMouseTracking(True)
         self.content_edit.viewport().installEventFilter(self)
@@ -114,7 +121,27 @@ class OverlayView(QWidget):
         rect = spatial.target_rect
         w = max(self.config.overlay.min_width, rect.width)
         h = max(self.config.overlay.min_height, rect.height)
-        self.setGeometry(QRect(rect.x, rect.y, w, h))
+
+        # Clamp strictly within target monitor's visible work area
+        target_screen = None
+        for s in QGuiApplication.screens():
+            s_geo = s.geometry()
+            if s_geo.contains(rect.x, rect.y):
+                target_screen = s
+                break
+        if not target_screen:
+            target_screen = QGuiApplication.primaryScreen()
+
+        if target_screen:
+            avail = target_screen.availableGeometry()
+            pad = 16
+            final_w = min(w, avail.width() - 2 * pad)
+            final_h = min(h, avail.height() - 2 * pad)
+            final_x = max(avail.left() + pad, min(rect.x, avail.right() - final_w - pad))
+            final_y = max(avail.top() + pad, min(rect.y, avail.bottom() - final_h - pad))
+            self.setGeometry(QRect(final_x, final_y, final_w, final_h))
+        else:
+            self.setGeometry(QRect(rect.x, rect.y, w, h))
 
         # Reset typography & styling
         self._current_font_size = spatial.typography.base_font_size
@@ -145,8 +172,11 @@ class OverlayView(QWidget):
         self._raw_markdown += token
         self._char_count += len(token)
 
-        # Render formatted markdown
+        # Render formatted markdown with guaranteed word and character wrapping
         self.content_edit.setMarkdown(self._raw_markdown)
+        opt = QTextOption()
+        opt.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+        self.content_edit.document().setDefaultTextOption(opt)
 
         # Ensure auto-scroll follows generation
         cursor = self.content_edit.textCursor()

@@ -35,6 +35,7 @@ def generate_overlay_qss(theme: ThemeConfig, font_size: int, is_fallback: bool =
         background-color: {'rgba(30, 41, 59, 0.75)' if theme.is_dark_background else 'rgba(241, 245, 249, 0.85)'};
         color: {'#38BDF8' if theme.is_dark_background else '#0284C7'};
         border-radius: 4px;
+        padding: 3px 5px;
     }}
 
     QTextEdit#ContentDisplay blockquote {{
@@ -61,6 +62,16 @@ def generate_overlay_qss(theme: ThemeConfig, font_size: int, is_fallback: bool =
 
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
         height: 0px;
+    }}
+
+    QScrollBar:horizontal {{
+        height: 0px;
+        background: transparent;
+    }}
+
+    QScrollBar::handle:horizontal {{
+        height: 0px;
+        background: transparent;
     }}
 
     QLabel#HeaderBadge {{
