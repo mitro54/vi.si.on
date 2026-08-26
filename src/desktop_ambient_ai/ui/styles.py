@@ -96,15 +96,15 @@ def generate_overlay_qss(theme: ThemeConfig, font_size: int, is_fallback: bool =
     }}
 
     QLabel#HeaderStatus {{
-        background-color: rgba(168, 85, 247, 0.18);
-        color: #C084FC;
+        background: transparent;
+        color: rgba(148, 163, 184, 0.75);
         font-weight: 500;
         font-size: 11px;
-        padding: 3px 8px;
-        border-radius: 6px;
-        border: 1px solid rgba(168, 85, 247, 0.38);
+        border: none;
+        padding: 0px 4px;
         margin-left: 6px;
     }}
+
 
     QLabel#TimerLabel {{
         color: rgba(148, 163, 184, 0.85);

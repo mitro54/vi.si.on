@@ -114,30 +114,19 @@ class SearXNGSearch:
             ensure_searxng_container(self.config, non_blocking=True)
 
     def search(self, query: str) -> list[SearchResult]:
-        """Executes search query against configured SearXNG instance."""
+        """Executes search query against configured SearXNG instance with resilient multi-engine fallback."""
         if not self.config.searxng_url:
             return []
 
         base_url = self.config.searxng_url.rstrip("/")
         endpoint = f"{base_url}/search"
-        params = {
-            "q": query,
-            "format": "json",
-            "categories": "general",
-        }
+        reliable_engines = "bing,yahoo,mojeek,wikipedia,duckduckgo"
 
-        try:
+        def _do_request(request_params: dict[str, Any]) -> list[SearchResult]:
             with httpx.Client(timeout=10.0) as client:
-                response = client.get(endpoint, params=params)
+                response = client.get(endpoint, params=request_params)
                 if response.status_code != 200:
-                    return [
-                        SearchResult(
-                            title="Search Error",
-                            url="",
-                            snippet=f"SearXNG returned HTTP status {response.status_code}",
-                        )
-                    ]
-
+                    return []
                 data = response.json()
                 raw_results = data.get("results", [])
                 results: list[SearchResult] = []
@@ -151,25 +140,28 @@ class SearXNGSearch:
                     )
                 return results
 
+        params = {
+            "q": query,
+            "format": "json",
+            "engines": reliable_engines,
+        }
+
+        try:
+            results = _do_request(params)
+            # If primary engines returned 0 results, fallback to broad search without engine restrictions
+            if not results:
+                results = _do_request({"q": query, "format": "json"})
+            return results
+
         except (httpx.HTTPError, OSError) as e:
             # If failed to connect, try auto-starting container and retry search once
             if ensure_searxng_container(self.config, non_blocking=False):
                 try:
-                    with httpx.Client(timeout=10.0) as client:
-                        response = client.get(endpoint, params=params)
-                        if response.status_code == 200:
-                            data = response.json()
-                            raw_results = data.get("results", [])
-                            results = []
-                            for r in raw_results[: self.config.max_results]:
-                                results.append(
-                                    SearchResult(
-                                        title=r.get("title", "Untitled"),
-                                        url=r.get("url", ""),
-                                        snippet=r.get("content", "") or r.get("snippet", ""),
-                                    )
-                                )
-                            return results
+                    results = _do_request(params)
+                    if not results:
+                        results = _do_request({"q": query, "format": "json"})
+                    if results:
+                        return results
                 except (httpx.HTTPError, OSError):
                     pass
 
@@ -180,6 +172,7 @@ class SearXNGSearch:
                     snippet=f"Failed to connect to SearXNG ({base_url}): {e}",
                 )
             ]
+
 
     def format_results_for_llm(self, results: list[SearchResult]) -> str:
         """Formats list of search results as a readable markdown string."""
