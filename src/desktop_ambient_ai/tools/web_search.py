@@ -218,11 +218,11 @@ class SearXNGSearch:
 
         base_url = self.config.searxng_url.rstrip("/")
         endpoint = f"{base_url}/search"
-        reliable_engines = "bing,yahoo,mojeek,wikipedia,duckduckgo"
+        reliable_engines = "bing,yahoo,mojeek,wikipedia"
         effective_query = self._clean_query(query)
 
         def _do_request(request_params: dict[str, Any]) -> list[SearchResult]:
-            with httpx.Client(timeout=10.0) as client:
+            with httpx.Client(timeout=4.0) as client:
                 response = client.get(endpoint, params=request_params)
                 if response.status_code != 200:
                     return []
@@ -256,6 +256,7 @@ class SearXNGSearch:
 
             self._enrich_with_live_meteo(query, results)
             return results
+
 
         except (httpx.HTTPError, OSError) as e:
             # If failed to connect, try auto-starting container and retry search once

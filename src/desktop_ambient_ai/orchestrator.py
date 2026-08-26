@@ -21,6 +21,8 @@ from .llm.provider_factory import create_llm_worker
 from .storage.conversation_store import ConversationSession, ConversationStore
 from .tools.knowledge_base import KnowledgeBase
 from .tools.tool_registry import ToolRegistry
+from .tools.tool_worker import ToolExecutionWorker
+
 from .ui.conversation_picker import ConversationPicker
 from .ui.input_modal import InputModal
 from .ui.overlay_view import OverlayView
@@ -80,8 +82,9 @@ class Orchestrator(QObject):
         self.conversation_picker = ConversationPicker(store)
         self.screen_snipper = ScreenSnipper(capture_engine=self.capture)
 
-        # LLM Worker
+        # LLM Worker & Tool Execution Worker
         self.llm_worker: BaseLLMWorker = create_llm_worker(config.provider, parent=self)
+        self.tool_worker = ToolExecutionWorker(tool_registry=self.tool_registry, parent=self)
 
         self._active_prompt_monitor: Optional[MonitorInfo] = None
         self._active_prompt_rect: Optional[Any] = None
@@ -121,6 +124,11 @@ class Orchestrator(QObject):
         self.llm_worker.stream_complete.connect(self.on_stream_complete)
         self.llm_worker.stream_error.connect(self.on_stream_error)
         self.llm_worker.tool_call_requested.connect(self.on_tool_call_requested)
+
+        # Tool Worker events (async background execution)
+        self.tool_worker.tool_results_ready.connect(self.on_tool_results_ready)
+        self.tool_worker.tool_error.connect(self.on_stream_error)
+
 
     def _start_input_listeners(self) -> None:
         """Initializes global keyboard shortcuts and mouse scroll listener in daemon threads."""
@@ -604,7 +612,7 @@ class Orchestrator(QObject):
 
     @pyqtSlot(list)
     def on_tool_call_requested(self, tool_calls: list) -> None:
-        """Executes requested tool calls and sends results back to LLM to resume generation."""
+        """Dispatches requested tool calls to background worker thread to prevent UI freezing."""
         if not tool_calls:
             return
 
@@ -624,34 +632,12 @@ class Orchestrator(QObject):
 
         self.overlay_view.set_status(" | ".join(tool_status_parts))
 
-        # 2. Format assistant's tool_calls turn (Standard OpenAI/Ollama tool calling structure)
-        assistant_tool_msg = {
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [
-                {
-                    "function": {
-                        "name": tc.get("name", ""),
-                        "arguments": tc.get("arguments", {}),
-                    }
-                }
-                for tc in tool_calls
-            ],
-        }
+        # 2. Execute tools in background worker without blocking Qt UI thread
+        self.tool_worker.execute_async(tool_calls)
 
-        # 3. Execute tools
-        tool_results = []
-        for tc in tool_calls:
-            name = tc.get("name", "")
-            args = tc.get("arguments", {})
-            result_str = self.tool_registry.execute(name, args)
-            tool_results.append({
-                "role": "tool",
-                "name": name,
-                "content": result_str,
-            })
-
-        # 4. Append assistant call turn + tool results to session and resume streaming
+    @pyqtSlot(dict, list)
+    def on_tool_results_ready(self, assistant_tool_msg: dict, tool_results: list) -> None:
+        """Triggered when background tool execution completes. Resumes LLM generation."""
         if self._current_session:
             self._current_session.messages.append(assistant_tool_msg)
             self._current_session.messages.extend(tool_results)
@@ -667,6 +653,7 @@ class Orchestrator(QObject):
                 tools=tools if tools else None,
                 mode=effective_mode,
             )
+
 
 
 
