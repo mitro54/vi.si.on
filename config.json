@@ -63,5 +63,5 @@
   },
   "mcp_servers": [],
   "edge_density_fallback_threshold": 0.35,
-  "setup_complete": true
+  "setup_complete": false
 }

@@ -8,12 +8,10 @@ import sys
 import threading
 import time
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 from PyQt6.QtCore import QObject, QPoint, QRect, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QCursor
-from PyQt6.QtWidgets import QApplication
 
 from .config import AppConfig
 from .llm.base import BaseLLMWorker
@@ -21,15 +19,12 @@ from .llm.provider_factory import create_llm_worker
 from .storage.conversation_store import ConversationSession, ConversationStore
 from .tools.knowledge_base import KnowledgeBase
 from .tools.tool_registry import ToolRegistry
-from .tools.tool_worker import ToolExecutionWorker
-
 from .ui.conversation_picker import ConversationPicker
 from .ui.input_modal import InputModal
 from .ui.overlay_view import OverlayView
-from .ui.setup_wizard import SetupWizard
 from .ui.snip_overlay import ScreenSnipper
 from .vision.capture import MonitorInfo, ScreenCapture
-from .vision.spatial_finder import SpatialFinder, SpatialResult
+from .vision.spatial_finder import SpatialFinder
 
 
 class AppState(Enum):
@@ -50,6 +45,7 @@ class Orchestrator(QObject):
     _sig_ocr_selection = pyqtSignal()
     _sig_dismiss = pyqtSignal()
     _sig_global_scroll = pyqtSignal(int)
+    _sig_global_drag_move = pyqtSignal(int, int)
     _sig_cycle_conv = pyqtSignal(int)
 
     def __init__(
@@ -57,8 +53,8 @@ class Orchestrator(QObject):
         config: AppConfig,
         store: ConversationStore,
         tool_registry: ToolRegistry,
-        knowledge_base: Optional[KnowledgeBase] = None,
-        parent: Optional[QObject] = None,
+        knowledge_base: KnowledgeBase | None = None,
+        parent: QObject | None = None,
     ):
         super().__init__(parent)
         self.config = config
@@ -67,8 +63,8 @@ class Orchestrator(QObject):
         self.knowledge_base = knowledge_base
 
         self.state = AppState.IDLE
-        self._current_session: Optional[ConversationSession] = None
-        self._last_quick_session: Optional[ConversationSession] = None
+        self._current_session: ConversationSession | None = None
+        self._last_quick_session: ConversationSession | None = None
         self._promotion_deadline: float = 0.0
         self._snipping_from_modal: bool = False
 
@@ -82,13 +78,12 @@ class Orchestrator(QObject):
         self.conversation_picker = ConversationPicker(store)
         self.screen_snipper = ScreenSnipper(capture_engine=self.capture)
 
-        # LLM Worker & Tool Execution Worker
+        # LLM Worker
         self.llm_worker: BaseLLMWorker = create_llm_worker(config.provider, parent=self)
-        self.tool_worker = ToolExecutionWorker(tool_registry=self.tool_registry, parent=self)
 
-        self._active_prompt_monitor: Optional[MonitorInfo] = None
-        self._active_prompt_rect: Optional[Any] = None
-        self._last_session_monitor: Optional[MonitorInfo] = None
+        self._active_prompt_monitor: MonitorInfo | None = None
+        self._active_prompt_rect: Any | None = None
+        self._last_session_monitor: MonitorInfo | None = None
 
         self._setup_signals()
         self._start_input_listeners()
@@ -101,6 +96,7 @@ class Orchestrator(QObject):
         self._sig_ocr_selection.connect(self.trigger_ocr_selection)
         self._sig_dismiss.connect(self.dismiss)
         self._sig_global_scroll.connect(self.overlay_view.scroll_by_delta)
+        self._sig_global_drag_move.connect(self.on_global_drag_move)
         self._sig_cycle_conv.connect(self.cycle_conversation)
 
         # Screen Snipper events
@@ -125,13 +121,8 @@ class Orchestrator(QObject):
         self.llm_worker.stream_error.connect(self.on_stream_error)
         self.llm_worker.tool_call_requested.connect(self.on_tool_call_requested)
 
-        # Tool Worker events (async background execution)
-        self.tool_worker.tool_results_ready.connect(self.on_tool_results_ready)
-        self.tool_worker.tool_error.connect(self.on_stream_error)
-
-
     def _start_input_listeners(self) -> None:
-        """Initializes global keyboard shortcuts and mouse scroll listener in daemon threads."""
+        """Initializes global keyboard shortcuts and mouse listeners in daemon threads."""
         try:
             from pynput import keyboard, mouse
 
@@ -149,15 +140,52 @@ class Orchestrator(QObject):
             self._hotkey_thread = threading.Thread(target=self._hotkey_listener.run, daemon=True)
             self._hotkey_thread.start()
 
+            _global_middle_dragging = False
+            _last_mouse_pos = (0, 0)
+
+            def _on_mouse_click(x, y, button, pressed):
+                nonlocal _global_middle_dragging, _last_mouse_pos
+                if button == mouse.Button.middle:
+                    if pressed:
+                        if self.input_modal.isVisible() or self.overlay_view.isVisible():
+                            _global_middle_dragging = True
+                            _last_mouse_pos = (x, y)
+                    else:
+                        _global_middle_dragging = False
+
+            def _on_mouse_move(x, y):
+                nonlocal _last_mouse_pos
+                if _global_middle_dragging:
+                    dx = x - _last_mouse_pos[0]
+                    dy = y - _last_mouse_pos[1]
+                    _last_mouse_pos = (x, y)
+                    if dx != 0 or dy != 0:
+                        self._sig_global_drag_move.emit(int(dx), int(dy))
+
             def _on_mouse_scroll(x, y, dx, dy):
                 if self.overlay_view.isVisible():
                     self._sig_global_scroll.emit(int(dy))
 
-            self._mouse_listener = mouse.Listener(on_scroll=_on_mouse_scroll)
+            self._mouse_listener = mouse.Listener(
+                on_click=_on_mouse_click,
+                on_move=_on_mouse_move,
+                on_scroll=_on_mouse_scroll,
+            )
             self._mouse_thread = threading.Thread(target=self._mouse_listener.run, daemon=True)
             self._mouse_thread.start()
         except Exception as e:
             print(f"[Orchestrator] Global input hook initialization failed: {e}", file=sys.stderr)
+
+    def on_global_drag_move(self, dx: int, dy: int) -> None:
+        """Moves the active visible window (input modal or overlay view) by global middle-click mouse delta."""
+        if self.input_modal.isVisible():
+            self.input_modal.move(self.input_modal.x() + dx, self.input_modal.y() + dy)
+        elif self.overlay_view.isVisible():
+            self.overlay_view.move(self.overlay_view.x() + dx, self.overlay_view.y() + dy)
+            if not self.overlay_view._is_streaming and self.overlay_view._auto_close_timer.isActive():
+                self.overlay_view._auto_close_timer.stop()
+                self.overlay_view.timer_label.setText("Paused")
+
 
     def _get_target_monitor(self) -> MonitorInfo:
         """Determines target monitor based on screen_target preference."""
@@ -178,10 +206,10 @@ class Orchestrator(QObject):
         self,
         mode: str = "quick",
         turn_count: int = 1,
-        title: Optional[str] = None,
+        title: str | None = None,
         clear_text: bool = True,
-        target_monitor: Optional[MonitorInfo] = None,
-        exact_pos: Optional[QPoint] = None,
+        target_monitor: MonitorInfo | None = None,
+        exact_pos: QPoint | None = None,
     ) -> None:
         """Helper to show modal with user configured placement, screen target, and adaptive luminance contrast."""
         self.state = AppState.INPUT_ACTIVE
@@ -196,7 +224,7 @@ class Orchestrator(QObject):
         use_clutter_avoidance = getattr(self.config.overlay, "prompt_clutter_avoidance", True)
 
         theme = None
-        chosen_pos: Optional[QPoint] = None
+        chosen_pos: QPoint | None = None
 
         if exact_pos:
             chosen_pos = exact_pos
@@ -612,7 +640,7 @@ class Orchestrator(QObject):
 
     @pyqtSlot(list)
     def on_tool_call_requested(self, tool_calls: list) -> None:
-        """Dispatches requested tool calls to background worker thread to prevent UI freezing."""
+        """Executes requested tool calls and sends results back to LLM to resume generation."""
         if not tool_calls:
             return
 
@@ -632,12 +660,34 @@ class Orchestrator(QObject):
 
         self.overlay_view.set_status(" | ".join(tool_status_parts))
 
-        # 2. Execute tools in background worker without blocking Qt UI thread
-        self.tool_worker.execute_async(tool_calls)
+        # 2. Format assistant's tool_calls turn (Standard OpenAI/Ollama tool calling structure)
+        assistant_tool_msg = {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "function": {
+                        "name": tc.get("name", ""),
+                        "arguments": tc.get("arguments", {}),
+                    }
+                }
+                for tc in tool_calls
+            ],
+        }
 
-    @pyqtSlot(dict, list)
-    def on_tool_results_ready(self, assistant_tool_msg: dict, tool_results: list) -> None:
-        """Triggered when background tool execution completes. Resumes LLM generation."""
+        # 3. Execute tools
+        tool_results = []
+        for tc in tool_calls:
+            name = tc.get("name", "")
+            args = tc.get("arguments", {})
+            result_str = self.tool_registry.execute(name, args)
+            tool_results.append({
+                "role": "tool",
+                "name": name,
+                "content": result_str,
+            })
+
+        # 4. Append assistant call turn + tool results to session and resume streaming
         if self._current_session:
             self._current_session.messages.append(assistant_tool_msg)
             self._current_session.messages.extend(tool_results)
@@ -653,7 +703,6 @@ class Orchestrator(QObject):
                 tools=tools if tools else None,
                 mode=effective_mode,
             )
-
 
 
 

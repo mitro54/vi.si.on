@@ -106,11 +106,89 @@ search:
         return False
 
 
+from concurrent.futures import ThreadPoolExecutor
+from html.parser import HTMLParser
+
+
+class CleanTextExtractor(HTMLParser):
+    """Fast, lightweight HTML parser that extracts readable body text, ignoring scripts, styles, and chrome."""
+
+    def __init__(self):
+        super().__init__()
+        self.text_parts: list[str] = []
+        self.ignore_stack: list[str] = []
+        self.ignored_tags = {"script", "style", "nav", "footer", "header", "noscript", "svg", "button", "input", "form"}
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        tag_lower = tag.lower()
+        if tag_lower in self.ignored_tags:
+            self.ignore_stack.append(tag_lower)
+        elif tag_lower in {"p", "br", "h1", "h2", "h3", "h4", "h5", "h6", "li", "tr", "article", "section"}:
+            self.text_parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        tag_lower = tag.lower()
+        if self.ignore_stack and self.ignore_stack[-1] == tag_lower:
+            self.ignore_stack.pop()
+        elif tag_lower in {"p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "tr", "article", "section"}:
+            self.text_parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if not self.ignore_stack:
+            cleaned = data.strip()
+            if cleaned:
+                self.text_parts.append(cleaned + " ")
+
+    def get_text(self, max_chars: int = 1500) -> str:
+        raw = "".join(self.text_parts)
+        cleaned = re.sub(r"[ \t]+", " ", raw)
+        cleaned = re.sub(r"\n\s*\n+", "\n", cleaned).strip()
+        if len(cleaned) > max_chars:
+            return cleaned[:max_chars].rsplit(" ", 1)[0] + "..."
+        return cleaned
+
+
+def fetch_page_content(url: str, timeout: float = 1.2) -> str:
+    """Streams the first 32KB of HTML from URL to rapidly extract top article text with minimal latency."""
+    if not url.startswith(("http://", "https://")):
+        return ""
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9,fi;q=0.8",
+    }
+    try:
+        with (
+            httpx.Client(timeout=timeout, follow_redirects=True) as client,
+            client.stream("GET", url, headers=headers) as response,
+        ):
+            if response.status_code == 200:
+                chunks = []
+                total = 0
+                for chunk in response.iter_bytes(chunk_size=8192):
+                    chunks.append(chunk)
+                    total += len(chunk)
+                    if total >= 32768:
+                        break
+                html_text = b"".join(chunks).decode("utf-8", errors="ignore")
+                parser = CleanTextExtractor()
+                parser.feed(html_text)
+                return parser.get_text()
+    except (httpx.HTTPError, OSError, ValueError, TimeoutError):
+        pass
+
+    return ""
+
+
 class SearXNGSearch:
     """Queries SearXNG JSON API for real-time web intelligence."""
 
     def __init__(self, config: WebSearchConfig):
         self.config = config
+        self._cache: dict[str, tuple[float, list[SearchResult]]] = {}
         if self.config.enabled:
             ensure_searxng_container(self.config, non_blocking=True)
 
@@ -164,7 +242,7 @@ class SearXNGSearch:
             return
 
         try:
-            with httpx.Client(timeout=4.0) as client:
+            with httpx.Client(timeout=2.5) as client:
                 w_resp = client.get(f"https://wttr.in/{loc}?format=j1")
                 if w_resp.status_code == 200:
                     w_data = w_resp.json()
@@ -209,20 +287,45 @@ class SearXNGSearch:
         except (httpx.HTTPError, OSError, ValueError):
             pass
 
+    def _enrich_with_page_content(self, results: list[SearchResult], max_pages: int = 2) -> None:
+        """Concurrently fetches live webpage bodies for the top search results to extract real article text."""
+        targets = [r for r in results[:max_pages] if r.url and not r.url.startswith("https://wttr.in")]
+        if not targets:
+            return
 
+        urls = [t.url for t in targets]
+        try:
+            with ThreadPoolExecutor(max_workers=len(urls)) as executor:
+                page_texts = list(executor.map(fetch_page_content, urls))
+
+            for item, p_text in zip(targets, page_texts):
+                if p_text and len(p_text) > 40:
+                    item.snippet = (item.snippet + f"\n\nLive Webpage Content:\n{p_text}").strip()
+        except (httpx.HTTPError, OSError, ValueError, TimeoutError):
+            pass
 
     def search(self, query: str) -> list[SearchResult]:
-        """Executes search query against configured SearXNG instance with resilient multi-engine fallback."""
+        """Executes fast search preferring Google/News with parallel fallback and caching."""
         if not self.config.searxng_url:
             return []
 
+        # Return instant result from 5-minute in-memory cache if available
+        now = time.monotonic()
+        cache_key = query.strip().lower()
+        if cache_key in self._cache:
+            ts, cached_results = self._cache[cache_key]
+            if now - ts < 300:
+                return cached_results
+
         base_url = self.config.searxng_url.rstrip("/")
         endpoint = f"{base_url}/search"
-        reliable_engines = "bing,yahoo,mojeek,wikipedia"
         effective_query = self._clean_query(query)
 
+        # Fast engine tiers
+        fast_engines = "duckduckgo news,reuters,bing,mojeek,duckduckgo"
+
         def _do_request(request_params: dict[str, Any]) -> list[SearchResult]:
-            with httpx.Client(timeout=4.0) as client:
+            with httpx.Client(timeout=3.5) as client:
                 response = client.get(endpoint, params=request_params)
                 if response.status_code != 200:
                     return []
@@ -239,36 +342,42 @@ class SearXNGSearch:
                     )
                 return results
 
-        params = {
-            "q": effective_query,
-            "format": "json",
-            "engines": reliable_engines,
-        }
+        is_news = bool(re.search(r"\b(news|headlines?|uutiset|uutisia|breaking|events?|latest|politics|economy)\b", query, re.IGNORECASE))
+        results: list[SearchResult] = []
 
         try:
-            results = _do_request(params)
-            # If cleaned query returned 0 results, retry with raw query
-            if not results and effective_query != query:
-                results = _do_request({"q": query, "format": "json", "engines": reliable_engines})
-            # If multi-engine returned 0 results, fallback to broad search without engine restrictions
+            # 1. Query news category or fast engines directly
+            if is_news:
+                results = _do_request({"q": effective_query, "format": "json", "categories": "news"})
+                if not results:
+                    results = _do_request({"q": effective_query, "format": "json", "engines": "google news,google,reuters"})
+            else:
+                # Include Google and fast engines concurrently
+                results = _do_request({"q": effective_query, "format": "json", "engines": f"google,{fast_engines}"})
+
+            # 2. If still empty, broad query fallback
             if not results:
                 results = _do_request({"q": effective_query, "format": "json"})
 
+            # 3. Fast meteorological sensor lookup if weather query
             self._enrich_with_live_meteo(query, results)
+
+            # 4. Stream top 2 page heads in parallel
+            self._enrich_with_page_content(results, max_pages=2)
+
+            if results:
+                self._cache[cache_key] = (now, results)
+
             return results
 
-
         except (httpx.HTTPError, OSError) as e:
-            # If failed to connect, try auto-starting container and retry search once
             if ensure_searxng_container(self.config, non_blocking=False):
                 try:
-                    results = _do_request(params)
-                    if not results and effective_query != query:
-                        results = _do_request({"q": query, "format": "json", "engines": reliable_engines})
-                    if not results:
-                        results = _do_request({"q": effective_query, "format": "json"})
+                    results = _do_request({"q": effective_query, "format": "json", "engines": fast_engines})
                     if results:
                         self._enrich_with_live_meteo(query, results)
+                        self._enrich_with_page_content(results, max_pages=2)
+                        self._cache[cache_key] = (now, results)
                         return results
                 except (httpx.HTTPError, OSError):
                     pass
@@ -280,6 +389,8 @@ class SearXNGSearch:
                     snippet=f"Failed to connect to SearXNG ({base_url}): {e}",
                 )
             ]
+
+
 
 
 

@@ -15,7 +15,13 @@ from PyQt6.QtCore import (
     QTimer,
     pyqtSignal,
 )
-from PyQt6.QtGui import QGuiApplication, QTextCursor, QTextOption, QWheelEvent
+from PyQt6.QtGui import (
+    QGuiApplication,
+    QMouseEvent,
+    QTextCursor,
+    QTextOption,
+    QWheelEvent,
+)
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -154,7 +160,7 @@ class OverlayView(QWidget):
         self._render_timer.stop()
         self._auto_close_timer.stop()
         self.timer_label.setText("")
-        self.set_status("Thinking...")
+        self.set_status("Waiting for model...")
         self._reset_copy_btn()
 
 
@@ -317,8 +323,24 @@ class OverlayView(QWidget):
             super().wheelEvent(event)
 
     def eventFilter(self, watched, event: QEvent) -> bool:
-        """Intercepts viewport events to ensure scroll wheel always rolls text and pauses timer."""
-        if event.type() == QEvent.Type.Wheel:
+        """Intercepts viewport events to ensure scroll wheel rolls text and middle-click drags overlay."""
+        if event.type() == QEvent.Type.MouseButtonPress and isinstance(event, QMouseEvent):
+            if event.button() == Qt.MouseButton.MiddleButton:
+                self._is_dragging = True
+                self._drag_start_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+                if not self._is_streaming and self._auto_close_timer.isActive():
+                    self._auto_close_timer.stop()
+                    self.timer_label.setText("Paused")
+                return True
+        elif event.type() == QEvent.Type.MouseMove and isinstance(event, QMouseEvent):
+            if getattr(self, "_is_dragging", False) and (event.buttons() & Qt.MouseButton.MiddleButton):
+                self.move(event.globalPosition().toPoint() - self._drag_start_pos)
+                return True
+        elif event.type() == QEvent.Type.MouseButtonRelease and isinstance(event, QMouseEvent):
+            if event.button() == Qt.MouseButton.MiddleButton:
+                self._is_dragging = False
+                return True
+        elif event.type() == QEvent.Type.Wheel:
             delta = event.angleDelta().y()
             if delta != 0:
                 dy = 1 if delta > 0 else -1
@@ -328,15 +350,41 @@ class OverlayView(QWidget):
             if not self._is_streaming and self._auto_close_timer.isActive():
                 self._auto_close_timer.stop()
                 self.timer_label.setText("Paused")
-        elif event.type() == QEvent.Type.Leave:
-            if (
-                not self._is_streaming
-                and self.config.overlay.auto_close == "timer"
-                and not self.geometry().contains(self.mapFromGlobal(self.cursor().pos()))
-            ):
-                self._auto_close_timer.start()
+        elif (
+            event.type() == QEvent.Type.Leave
+            and not self._is_streaming
+            and self.config.overlay.auto_close == "timer"
+            and not self.geometry().contains(self.mapFromGlobal(self.cursor().pos()))
+        ):
+            self._auto_close_timer.start()
 
         return super().eventFilter(watched, event)
+
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.MiddleButton:
+            self._is_dragging = True
+            self._drag_start_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            if not self._is_streaming and self._auto_close_timer.isActive():
+                self._auto_close_timer.stop()
+                self.timer_label.setText("Paused")
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if getattr(self, "_is_dragging", False) and (event.buttons() & Qt.MouseButton.MiddleButton):
+            self.move(event.globalPosition().toPoint() - self._drag_start_pos)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.MiddleButton:
+            self._is_dragging = False
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def enterEvent(self, event) -> None:
         """Pauses auto-close timer on hover so user can comfortably read."""
@@ -344,6 +392,7 @@ class OverlayView(QWidget):
             self._auto_close_timer.stop()
             self.timer_label.setText("Paused")
         super().enterEvent(event)
+
 
     def leaveEvent(self, event) -> None:
         """Resumes auto-close countdown when cursor leaves the overlay."""
