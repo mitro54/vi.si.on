@@ -83,6 +83,11 @@ class OverlayView(QWidget):
         self.badge_label.setObjectName("HeaderBadge")
         header_bar.addWidget(self.badge_label)
 
+        self.status_label = QLabel("", self)
+        self.status_label.setObjectName("HeaderStatus")
+        self.status_label.setVisible(False)
+        header_bar.addWidget(self.status_label)
+
         header_bar.addStretch()
 
         self.copy_btn = QPushButton("📋 Copy", self)
@@ -123,6 +128,15 @@ class OverlayView(QWidget):
         self.content_edit.viewport().installEventFilter(self)
         main_layout.addWidget(self.content_edit)
 
+    def set_status(self, text: str) -> None:
+        """Updates real-time activity status (e.g. searching web, running tools, thinking)."""
+        if not text:
+            self.status_label.setText("")
+            self.status_label.setVisible(False)
+        else:
+            self.status_label.setText(text)
+            self.status_label.setVisible(True)
+
     def prepare_for_stream(self, spatial: SpatialResult, mode: str = "quick", turn_count: int = 1) -> None:
         """Applies geometry, dynamic styles, and resets text buffers before streaming begins."""
         self.spatial_result = spatial
@@ -133,7 +147,9 @@ class OverlayView(QWidget):
         self._render_timer.stop()
         self._auto_close_timer.stop()
         self.timer_label.setText("")
+        self.set_status("Thinking...")
         self._reset_copy_btn()
+
 
         # Position and size enforcing user-configured minimum constraints
         rect = spatial.target_rect
@@ -239,7 +255,9 @@ class OverlayView(QWidget):
         """Called when streaming finishes. Flushes any pending tokens and arms auto-close timers."""
         self._is_streaming = False
         self._render_timer.stop()
+        self.set_status("")
         self._flush_render()
+
 
         auto_mode = self.config.overlay.auto_close
 

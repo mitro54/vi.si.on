@@ -51,7 +51,7 @@
     "downscale_rate": 200
   },
   "web_search": {
-    "enabled": false,
+    "enabled": true,
     "searxng_url": "http://localhost:8888",
     "max_results": 5
   },
@@ -63,5 +63,5 @@
   },
   "mcp_servers": [],
   "edge_density_fallback_threshold": 0.35,
-  "setup_complete": false
+  "setup_complete": true
 }

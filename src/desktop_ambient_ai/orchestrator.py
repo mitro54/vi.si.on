@@ -549,24 +549,35 @@ class Orchestrator(QObject):
         frame = self.capture.capture_monitor(target_monitor)
         return target_monitor, frame
 
-    def _build_messages_payload(self, current_query: str) -> List[Dict[str, Any]]:
+    def _build_messages_payload(self, current_query: str) -> list[dict[str, Any]]:
         """Constructs LLM message payload with system prompt, RAG context, and session history."""
         system_content = self.config.system_prompt
 
         # Inject RAG Knowledge Base context if available
-        if self.knowledge_base and self.config.knowledge_base.enabled:
+        if self.knowledge_base and self.config.knowledge_base.enabled and current_query:
             rag_context = self.knowledge_base.format_context_for_prompt(current_query)
             if rag_context:
                 system_content += f"\n\n{rag_context}"
 
-        payload: List[Dict[str, Any]] = [{"role": "system", "content": system_content}]
+        payload: list[dict[str, Any]] = [{"role": "system", "content": system_content}]
 
-        # Append session messages
+        # Append session messages preserving tool_calls, name, and images
         if self._current_session:
             for m in self._current_session.messages:
-                payload.append({"role": m["role"], "content": m["content"]})
+                entry: dict[str, Any] = {
+                    "role": m["role"],
+                    "content": m.get("content", ""),
+                }
+                if m.get("tool_calls"):
+                    entry["tool_calls"] = m["tool_calls"]
+                if m.get("name"):
+                    entry["name"] = m["name"]
+                if m.get("images"):
+                    entry["images"] = m["images"]
+                payload.append(entry)
 
         return payload
+
 
     @pyqtSlot()
     def on_stream_complete(self) -> None:
@@ -587,13 +598,48 @@ class Orchestrator(QObject):
     def on_stream_error(self, error_msg: str) -> None:
         """Handles streaming failure."""
         self.state = AppState.DISPLAY
+        self.overlay_view.set_status("")
         self.overlay_view.append_token(f"\n\n[Error: {error_msg}]")
         self.overlay_view.finalize_display()
 
     @pyqtSlot(list)
     def on_tool_call_requested(self, tool_calls: list) -> None:
         """Executes requested tool calls and sends results back to LLM to resume generation."""
-        self.overlay_view.append_token("\n*Executing tool calls...*\n")
+        if not tool_calls:
+            return
+
+        # 1. Update live UI status label with specific tool & query details
+        tool_status_parts = []
+        for tc in tool_calls:
+            name = tc.get("name", "")
+            args = tc.get("arguments", {})
+            if name == "web_search":
+                q = args.get("query", "")
+                tool_status_parts.append(f'🌐 Searching web for "{q}"')
+            elif name == "search_knowledge_base":
+                q = args.get("query", "")
+                tool_status_parts.append(f'📚 Searching docs: "{q}"')
+            else:
+                tool_status_parts.append(f"⚡ Executing {name}")
+
+        self.overlay_view.set_status(" | ".join(tool_status_parts))
+
+        # 2. Format assistant's tool_calls turn (Standard OpenAI/Ollama tool calling structure)
+        assistant_tool_msg = {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "function": {
+                        "name": tc.get("name", ""),
+                        "arguments": tc.get("arguments", {}),
+                    }
+                }
+                for tc in tool_calls
+            ],
+        }
+
+        # 3. Execute tools
         tool_results = []
         for tc in tool_calls:
             name = tc.get("name", "")
@@ -605,11 +651,22 @@ class Orchestrator(QObject):
                 "content": result_str,
             })
 
-        # Append tool interactions to conversation messages and resume stream
+        # 4. Append assistant call turn + tool results to session and resume streaming
         if self._current_session:
+            self._current_session.messages.append(assistant_tool_msg)
             self._current_session.messages.extend(tool_results)
+
             messages_payload = self._build_messages_payload("")
-            self.llm_worker.start_stream(messages_payload)
+            effective_mode = getattr(self._current_session, "mode", "quick")
+            tools = self.tool_registry.get_tool_definitions()
+
+            self.overlay_view.set_status("✨ Synthesizing live search results...")
+            self.llm_worker.start_stream(
+                messages_payload,
+                tools=tools if tools else None,
+                mode=effective_mode,
+            )
+
 
     @pyqtSlot()
     def on_input_dismissed(self) -> None:
