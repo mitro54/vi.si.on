@@ -574,10 +574,11 @@ class Orchestrator(QObject):
         self.state = AppState.DISPLAY
         self.overlay_view.finalize_display()
 
-        # Save assistant message
-        full_text = self.overlay_view.content_edit.toPlainText()
+        # Save assistant message preserving raw markdown/LaTeX syntax
+        full_text = self.overlay_view.get_raw_markdown() or self.overlay_view.content_edit.toPlainText()
         if self._current_session and full_text:
             self._current_session.add_message("assistant", full_text)
+
 
         # Set promotion deadline (60 seconds after completion)
         self._promotion_deadline = time.monotonic() + self.config.conversation.promotion_timeout_seconds
