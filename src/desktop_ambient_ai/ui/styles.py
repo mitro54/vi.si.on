@@ -29,6 +29,13 @@ def generate_overlay_qss(theme: ThemeConfig, font_size: int, is_fallback: bool =
         selection-color: #FFFFFF;
     }}
 
+    QTextEdit#ContentDisplay h1, QTextEdit#ContentDisplay h2, QTextEdit#ContentDisplay h3 {{
+        color: {theme.text_color};
+        font-weight: 700;
+        margin-top: 10px;
+        margin-bottom: 4px;
+    }}
+
     QTextEdit#ContentDisplay pre, QTextEdit#ContentDisplay code {{
         font-family: 'Cascadia Code', 'Fira Code', 'Consolas', 'Courier New', monospace;
         font-size: {max(10, font_size - 1)}px;
@@ -42,6 +49,10 @@ def generate_overlay_qss(theme: ThemeConfig, font_size: int, is_fallback: bool =
         border-left: 3px solid {theme.accent_color};
         padding-left: 8px;
         color: {'rgba(203, 213, 225, 0.9)' if theme.is_dark_background else 'rgba(71, 85, 105, 0.9)'};
+    }}
+
+    QTextEdit#ContentDisplay table {{
+        border-collapse: collapse;
     }}
 
     QScrollBar:vertical {{
@@ -84,10 +95,43 @@ def generate_overlay_qss(theme: ThemeConfig, font_size: int, is_fallback: bool =
         border: 1px solid rgba(56, 189, 248, 0.3);
     }}
 
+    QLabel#HeaderStatus {{
+        background: transparent;
+        color: rgba(148, 163, 184, 0.75);
+        font-weight: 500;
+        font-size: 11px;
+        border: none;
+        padding: 0px 4px;
+        margin-left: 6px;
+    }}
+
+
     QLabel#TimerLabel {{
         color: rgba(148, 163, 184, 0.85);
         font-size: 11px;
         font-weight: 500;
+    }}
+
+
+    QPushButton#CopyBtn {{
+        background: rgba(148, 163, 184, 0.12);
+        color: rgba(148, 163, 184, 0.85);
+        border: 1px solid rgba(148, 163, 184, 0.22);
+        font-size: 11px;
+        font-weight: 500;
+        border-radius: 6px;
+        padding: 2px 8px;
+        margin-right: 4px;
+    }}
+
+    QPushButton#CopyBtn:hover {{
+        background: rgba(56, 189, 248, 0.2);
+        color: {theme.accent_color};
+        border-color: rgba(56, 189, 248, 0.45);
+    }}
+
+    QPushButton#CopyBtn:pressed {{
+        background: rgba(56, 189, 248, 0.35);
     }}
 
     QPushButton#DismissBtn {{
@@ -107,7 +151,9 @@ def generate_overlay_qss(theme: ThemeConfig, font_size: int, is_fallback: bool =
     """
 
 
-def generate_input_modal_qss(theme: Optional[ThemeConfig] = None) -> str:
+
+def generate_input_modal_qss(theme: ThemeConfig | None = None) -> str:
+
     """Generates stylesheet for the floating input prompt adapting dynamically to background luminance."""
     if theme and not theme.is_dark_background:
         # Light background (e.g. white browser, light PDF) -> Dark slate text with frosted glass backing

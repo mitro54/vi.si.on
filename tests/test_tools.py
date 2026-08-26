@@ -65,3 +65,19 @@ def test_tool_registry():
     tool_defs = registry.get_tool_definitions()
     assert len(tool_defs) >= 1
     assert any(t["function"]["name"] == "web_search" for t in tool_defs)
+
+
+def test_searxng_health_and_autostart_logic():
+    from desktop_ambient_ai.tools.web_search import ensure_searxng_container, is_searxng_healthy
+
+    # Health check for non-existent endpoint
+    assert is_searxng_healthy("http://localhost:59999", timeout=0.2) is False
+
+    # Disabled config should immediately return False
+    disabled_cfg = WebSearchConfig(enabled=False, searxng_url="http://localhost:8888")
+    assert ensure_searxng_container(disabled_cfg) is False
+
+    # Remote URL should return True without attempting local docker
+    remote_cfg = WebSearchConfig(enabled=True, searxng_url="https://searx.example.com")
+    assert ensure_searxng_container(remote_cfg) is True
+

@@ -4,10 +4,19 @@ Clean, floating query input modal with mode indication, multi-image attachments,
 
 from __future__ import annotations
 
-from typing import Any, List, Literal, Optional
+from typing import Any, Literal
 
-from PyQt6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QRect, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QCursor, QGuiApplication, QKeyEvent
+from PyQt6.QtCore import (
+    QEasingCurve,
+    QEvent,
+    QPoint,
+    QPropertyAnimation,
+    QRect,
+    Qt,
+    QTimer,
+    pyqtSignal,
+)
+from PyQt6.QtGui import QCursor, QGuiApplication, QKeyEvent, QMouseEvent
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -48,8 +57,9 @@ def _force_foreground_window(hwnd: int) -> None:
 
             if fg_thread_id != 0 and fg_thread_id != app_thread_id:
                 user32.AttachThreadInput(app_thread_id, fg_thread_id, False)
-        except Exception:
+        except (AttributeError, OSError):
             pass
+
 
 
 class PromptLineEdit(QLineEdit):
@@ -93,14 +103,14 @@ class InputModal(QWidget):
     ocr_requested = pyqtSignal()
     cycle_conv_requested = pyqtSignal(int)  # -1 for prev, +1 for next
 
-    def __init__(self, parent: Optional[QWidget] = None):
+    def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.mode: Literal["quick", "conversation"] = "quick"
         self.turn_count: int = 1
-        self._anim: Optional[QPropertyAnimation] = None
-        self._attached_images: List[str] = []
-        self._attached_metadata: List[tuple[int, int]] = []
-        self.theme: Optional[Any] = None
+        self._anim: QPropertyAnimation | None = None
+        self._attached_images: list[str] = []
+        self._attached_metadata: list[tuple[int, int]] = []
+        self.theme: Any | None = None
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -155,7 +165,9 @@ class InputModal(QWidget):
         self.input_edit.returnPressed.connect(self._on_submit)
         self.input_edit.alt_ocr_pressed.connect(self.ocr_requested.emit)
         self.input_edit.cycle_conv_requested.connect(self.cycle_conv_requested.emit)
+        self.input_edit.installEventFilter(self)
         main_layout.addWidget(self.input_edit)
+
 
     def attach_image_snip(self, b64_png: str, width: int, height: int, is_vision_capable: bool = True) -> None:
         """Attaches a snipped screen image to the active prompt. Supports multiple images."""
@@ -188,15 +200,15 @@ class InputModal(QWidget):
         self.img_chip.hide()
         self.input_edit.setPlaceholderText("Ask anything (or press Alt+3 to select a screen area)...")
 
-    def get_attached_image(self) -> Optional[str]:
+    def get_attached_image(self) -> str | None:
         """Returns the primary attached image, if any."""
         return self._attached_images[0] if self._attached_images else None
 
-    def get_attached_images(self) -> List[str]:
+    def get_attached_images(self) -> list[str]:
         """Returns all attached image payloads."""
         return list(self._attached_images)
 
-    def set_mode(self, mode: Literal["quick", "conversation"], turn_count: int = 1, title: Optional[str] = None) -> None:
+    def set_mode(self, mode: Literal["quick", "conversation"], turn_count: int = 1, title: str | None = None) -> None:
         """Updates modal visual mode and context labels."""
         self.mode = mode
         self.turn_count = turn_count
@@ -212,7 +224,7 @@ class InputModal(QWidget):
             self.mode_badge.setText(conv_label)
         self._refresh_badge_style()
 
-    def apply_theme(self, theme: Optional[Any]) -> None:
+    def apply_theme(self, theme: Any | None) -> None:
         """Applies adaptive stylesheet based on background luminance."""
         self.theme = theme
         self.setStyleSheet(generate_input_modal_qss(theme))
@@ -242,11 +254,11 @@ class InputModal(QWidget):
 
     def show_modal(
         self,
-        monitor: Optional[Any] = None,
+        monitor: Any | None = None,
         placement: str = "cursor",
-        theme: Optional[Any] = None,
+        theme: Any | None = None,
         clear_text: bool = True,
-        exact_pos: Optional[QPoint] = None,
+        exact_pos: QPoint | None = None,
     ) -> None:
         """Positions modal based on user placement preference ('cursor' or 'center') and target monitor."""
         if theme:
@@ -328,6 +340,49 @@ class InputModal(QWidget):
             self.hide()
             self.query_submitted.emit(text, self.mode)
 
+    def eventFilter(self, watched: Any, event: QEvent) -> bool:
+        """Intercepts child events to allow smooth middle-click window repositioning from anywhere."""
+        if event.type() == QEvent.Type.MouseButtonPress and isinstance(event, QMouseEvent):
+            if event.button() == Qt.MouseButton.MiddleButton:
+                self._is_dragging = True
+                self._drag_start_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+                return True
+        elif event.type() == QEvent.Type.MouseMove and isinstance(event, QMouseEvent):
+            if getattr(self, "_is_dragging", False) and (event.buttons() & Qt.MouseButton.MiddleButton):
+                self.move(event.globalPosition().toPoint() - self._drag_start_pos)
+                return True
+        elif (
+            event.type() == QEvent.Type.MouseButtonRelease
+            and isinstance(event, QMouseEvent)
+            and event.button() == Qt.MouseButton.MiddleButton
+        ):
+            self._is_dragging = False
+            return True
+        return super().eventFilter(watched, event)
+
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.MiddleButton:
+            self._is_dragging = True
+            self._drag_start_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if getattr(self, "_is_dragging", False) and (event.buttons() & Qt.MouseButton.MiddleButton):
+            self.move(event.globalPosition().toPoint() - self._drag_start_pos)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.MiddleButton:
+            self._is_dragging = False
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if event.key() == Qt.Key.Key_Escape:
             self.hide()
@@ -335,3 +390,4 @@ class InputModal(QWidget):
             event.accept()
         else:
             super().keyPressEvent(event)
+

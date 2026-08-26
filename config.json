@@ -40,7 +40,7 @@
     "prompt_fallback": "cursor"
   },
   "conversation": {
-    "promotion_timeout_seconds": 3,
+    "promotion_timeout_seconds": 5,
     "persist_to_disk": true
   },
   "system_prompt": "You are a precise, context-aware desktop assistant. Provide direct, accurate, and well-structured answers. Use code blocks for code. Prioritize correctness. When information may be outdated, indicate this. Format for quick scanning: bullets, bold key terms, concise headers.",

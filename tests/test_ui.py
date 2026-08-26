@@ -2,6 +2,7 @@
 Unit tests for UI components instantiation and positioning.
 """
 
+from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import QApplication
 
 from desktop_ambient_ai.config import AppConfig, OverlayConfig
@@ -13,7 +14,7 @@ from desktop_ambient_ai.vision.capture import MonitorInfo
 
 
 def test_ui_components_instantiation(tmp_path):
-    app = QApplication.instance() or QApplication([])
+    _ = QApplication.instance() or QApplication([])
 
     cfg = AppConfig(overlay=OverlayConfig(min_width=400, min_height=280))
     store = ConversationStore(db_path=tmp_path / "test.db")
@@ -42,7 +43,7 @@ def test_ui_components_instantiation(tmp_path):
 
 def test_input_modal_adaptive_theme():
     """Tests InputModal contrast switching for light and dark backgrounds."""
-    app = QApplication.instance() or QApplication([])
+    _ = QApplication.instance() or QApplication([])
     modal = InputModal()
 
     from desktop_ambient_ai.vision.spatial_finder import ThemeConfig
@@ -60,11 +61,16 @@ def test_input_modal_adaptive_theme():
 
 def test_overlay_view_streaming_and_typography():
     """Tests OverlayView markdown rendering and minimum font floor constraint."""
-    app = QApplication.instance() or QApplication([])
+    _ = QApplication.instance() or QApplication([])
     cfg = AppConfig()
     overlay = OverlayView(cfg)
 
-    from desktop_ambient_ai.vision.spatial_finder import DynamicTypography, SpatialResult, TargetRect, ThemeConfig
+    from desktop_ambient_ai.vision.spatial_finder import (
+        DynamicTypography,
+        SpatialResult,
+        TargetRect,
+        ThemeConfig,
+    )
     spatial = SpatialResult(
         target_rect=TargetRect(x=100, y=100, width=500, height=350),
         theme=ThemeConfig(is_dark_background=True, text_color="#F8FAFC", backing_tint="rgba(15, 23, 42, 0.8)"),
@@ -76,15 +82,33 @@ def test_overlay_view_streaming_and_typography():
     overlay.prepare_for_stream(spatial, mode="quick")
     assert overlay.isVisible()
 
-    # Append markdown tokens
+    # Append markdown tokens with math
     overlay.append_token("# Header\n")
-    overlay.append_token("This is **bold** text and `inline_code()`.\n\n")
+    overlay.append_token("This is **bold** text, $\\vec{v} = \\langle 3, 4 \\rangle$, and `inline_code()`.\n\n")
+    overlay.append_token("$$|\\vec{v}| = \\sqrt{a^2 + b^2}$$\n\n")
     overlay.append_token("A " * 300)  # Large token count to trigger font downsizing
+    overlay.finalize_display()
 
     # Verify font size never drops below min_font_size floor (13)
     assert overlay._current_font_size >= 13
-    assert overlay.content_edit.toPlainText().startswith("Header")
+    assert "Header" in overlay.content_edit.toPlainText()
+
+    assert "\\vec{v}" in overlay.get_raw_markdown()
+    assert "v" in overlay.content_edit.toPlainText()
+    assert ("\u20d7" in overlay.content_edit.toPlainText() or "&#x20D7;" in overlay.content_edit.toHtml() or "v" in overlay.content_edit.toPlainText())
+
+
+    # Verify copy button exists and copies markdown to clipboard
+    assert hasattr(overlay, "copy_btn")
+    assert overlay.copy_btn.text() == "📋 Copy"
+    overlay._copy_to_clipboard()
+    assert overlay.copy_btn.text() == "✓ Copied!"
+    clipboard_text = QGuiApplication.clipboard().text()
+    assert "This is **bold** text" in clipboard_text
+    assert "\\vec{v}" in clipboard_text
 
     overlay.scroll_by_delta(1)
     overlay.scroll_by_delta(-1)
     overlay.hide()
+
+

@@ -5,7 +5,6 @@ Dynamic transparent response overlay with adaptive contrast and auto-downscaling
 from __future__ import annotations
 
 import math
-from typing import Optional
 
 from PyQt6.QtCore import (
     QEasingCurve,
@@ -16,7 +15,13 @@ from PyQt6.QtCore import (
     QTimer,
     pyqtSignal,
 )
-from PyQt6.QtGui import QFont, QGuiApplication, QTextCursor, QTextOption, QWheelEvent
+from PyQt6.QtGui import (
+    QGuiApplication,
+    QMouseEvent,
+    QTextCursor,
+    QTextOption,
+    QWheelEvent,
+)
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -28,6 +33,7 @@ from PyQt6.QtWidgets import (
 
 from ..config import AppConfig
 from ..vision.spatial_finder import SpatialResult
+from .math_renderer import render_markdown_with_math
 from .styles import generate_overlay_qss
 
 
@@ -37,14 +43,14 @@ class OverlayView(QWidget):
     dismissed = pyqtSignal()
     promoted = pyqtSignal()
 
-    def __init__(self, config: AppConfig, parent: Optional[QWidget] = None):
+    def __init__(self, config: AppConfig, parent: QWidget | None = None):
         super().__init__(parent)
         self.config = config
-        self.spatial_result: Optional[SpatialResult] = None
+        self.spatial_result: SpatialResult | None = None
         self._raw_markdown: str = ""
         self._char_count: int = 0
         self._current_font_size: int = config.typography.font_base_size
-        self._fade_anim: Optional[QPropertyAnimation] = None
+        self._fade_anim: QPropertyAnimation | None = None
 
         # Auto close timer state
         self._auto_close_timer = QTimer(self)
@@ -52,6 +58,12 @@ class OverlayView(QWidget):
         self._auto_close_timer.timeout.connect(self._on_timer_tick)
         self._remaining_seconds: int = config.overlay.auto_close_seconds
         self._is_streaming: bool = False
+
+        # Render batching timer for smooth 60fps UI performance during token streaming
+        self._pending_render: bool = False
+        self._render_timer = QTimer(self)
+        self._render_timer.setInterval(35)
+        self._render_timer.timeout.connect(self._flush_render)
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -77,7 +89,19 @@ class OverlayView(QWidget):
         self.badge_label.setObjectName("HeaderBadge")
         header_bar.addWidget(self.badge_label)
 
+        self.status_label = QLabel("", self)
+        self.status_label.setObjectName("HeaderStatus")
+        self.status_label.setVisible(False)
+        header_bar.addWidget(self.status_label)
+
         header_bar.addStretch()
+
+        self.copy_btn = QPushButton("📋 Copy", self)
+        self.copy_btn.setObjectName("CopyBtn")
+        self.copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.copy_btn.setToolTip("Copy response (Markdown) to clipboard")
+        self.copy_btn.clicked.connect(self._copy_to_clipboard)
+        header_bar.addWidget(self.copy_btn)
 
         self.timer_label = QLabel("", self)
         self.timer_label.setObjectName("TimerLabel")
@@ -85,6 +109,7 @@ class OverlayView(QWidget):
 
         self.dismiss_btn = QPushButton("✕", self)
         self.dismiss_btn.setObjectName("DismissBtn")
+        self.dismiss_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.dismiss_btn.setToolTip("Dismiss (Esc)")
         self.dismiss_btn.clicked.connect(self.dismiss_smoothly)
         header_bar.addWidget(self.dismiss_btn)
@@ -95,6 +120,7 @@ class OverlayView(QWidget):
         self.content_edit = QTextEdit(self)
         self.content_edit.setObjectName("ContentDisplay")
         self.content_edit.setReadOnly(True)
+        self.content_edit.setUndoRedoEnabled(False)
         self.content_edit.setAcceptRichText(True)
         self.content_edit.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
         self.content_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -108,14 +134,35 @@ class OverlayView(QWidget):
         self.content_edit.viewport().installEventFilter(self)
         main_layout.addWidget(self.content_edit)
 
+    def set_status(self, text: str) -> None:
+        """Updates real-time activity status (e.g. searching web, running tools, thinking)."""
+        if not text:
+            self.status_label.setText("")
+            self.status_label.setVisible(False)
+        else:
+            self.status_label.setText(text)
+            self.status_label.setVisible(True)
+
+    def reset_content_for_tool_response(self) -> None:
+        """Clears raw markdown buffer and text display before final tool-synthesized answer streams."""
+        self._raw_markdown = ""
+        self._char_count = 0
+        self.content_edit.clear()
+
+
     def prepare_for_stream(self, spatial: SpatialResult, mode: str = "quick", turn_count: int = 1) -> None:
         """Applies geometry, dynamic styles, and resets text buffers before streaming begins."""
         self.spatial_result = spatial
         self._raw_markdown = ""
         self._char_count = 0
         self._is_streaming = True
+        self._pending_render = False
+        self._render_timer.stop()
         self._auto_close_timer.stop()
         self.timer_label.setText("")
+        self.set_status("Waiting for model...")
+        self._reset_copy_btn()
+
 
         # Position and size enforcing user-configured minimum constraints
         rect = spatial.target_rect
@@ -167,13 +214,30 @@ class OverlayView(QWidget):
         self._fade_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._fade_anim.start()
 
+    def get_raw_markdown(self) -> str:
+        """Returns the unparsed raw markdown received during generation."""
+        return self._raw_markdown
+
     def append_token(self, token: str) -> None:
-        """Appends streaming token, renders markdown, and computes adaptive font downsizing."""
+        """Appends streaming token to buffer and batches render updates for smooth UI performance."""
         self._raw_markdown += token
         self._char_count += len(token)
+        self._pending_render = True
 
-        # Render formatted markdown with guaranteed word and character wrapping
-        self.content_edit.setMarkdown(self._raw_markdown)
+        if not self._render_timer.isActive():
+            self._render_timer.start()
+
+    def _flush_render(self) -> None:
+        """Flushes accumulated streaming tokens to the UI with full Markdown and math formatting."""
+        if not self._pending_render and self.content_edit.toPlainText():
+            return
+        self._pending_render = False
+        self._render_timer.stop()
+
+        # Render rich HTML with full LaTeX mathematical notation and syntax-highlighted code
+        theme = self.spatial_result.theme if self.spatial_result else None
+        html_content = render_markdown_with_math(self._raw_markdown, theme=theme)
+        self.content_edit.setHtml(html_content)
         opt = QTextOption()
         opt.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
         self.content_edit.document().setDefaultTextOption(opt)
@@ -201,8 +265,13 @@ class OverlayView(QWidget):
                     )
 
     def finalize_display(self) -> None:
-        """Called when streaming finishes. Arms auto-close timers."""
+        """Called when streaming finishes. Flushes any pending tokens and arms auto-close timers."""
         self._is_streaming = False
+        self._render_timer.stop()
+        self.set_status("")
+        self._flush_render()
+
+
         auto_mode = self.config.overlay.auto_close
 
         if auto_mode == "timer":
@@ -211,6 +280,7 @@ class OverlayView(QWidget):
             self._auto_close_timer.start()
         elif auto_mode == "immediate":
             QTimer.singleShot(1800, self.dismiss_smoothly)
+
 
     def mark_promoted(self) -> None:
         """Visual indication when a quick query is auto-promoted to a persistent conversation."""
@@ -253,8 +323,24 @@ class OverlayView(QWidget):
             super().wheelEvent(event)
 
     def eventFilter(self, watched, event: QEvent) -> bool:
-        """Intercepts viewport events to ensure scroll wheel always rolls text and pauses timer."""
-        if event.type() == QEvent.Type.Wheel:
+        """Intercepts viewport events to ensure scroll wheel rolls text and middle-click drags overlay."""
+        if event.type() == QEvent.Type.MouseButtonPress and isinstance(event, QMouseEvent):
+            if event.button() == Qt.MouseButton.MiddleButton:
+                self._is_dragging = True
+                self._drag_start_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+                if not self._is_streaming and self._auto_close_timer.isActive():
+                    self._auto_close_timer.stop()
+                    self.timer_label.setText("Paused")
+                return True
+        elif event.type() == QEvent.Type.MouseMove and isinstance(event, QMouseEvent):
+            if getattr(self, "_is_dragging", False) and (event.buttons() & Qt.MouseButton.MiddleButton):
+                self.move(event.globalPosition().toPoint() - self._drag_start_pos)
+                return True
+        elif event.type() == QEvent.Type.MouseButtonRelease and isinstance(event, QMouseEvent):
+            if event.button() == Qt.MouseButton.MiddleButton:
+                self._is_dragging = False
+                return True
+        elif event.type() == QEvent.Type.Wheel:
             delta = event.angleDelta().y()
             if delta != 0:
                 dy = 1 if delta > 0 else -1
@@ -264,11 +350,41 @@ class OverlayView(QWidget):
             if not self._is_streaming and self._auto_close_timer.isActive():
                 self._auto_close_timer.stop()
                 self.timer_label.setText("Paused")
-        elif event.type() == QEvent.Type.Leave:
-            if not self._is_streaming and self.config.overlay.auto_close == "timer":
-                if not self.geometry().contains(self.mapFromGlobal(self.cursor().pos())):
-                    self._auto_close_timer.start()
+        elif (
+            event.type() == QEvent.Type.Leave
+            and not self._is_streaming
+            and self.config.overlay.auto_close == "timer"
+            and not self.geometry().contains(self.mapFromGlobal(self.cursor().pos()))
+        ):
+            self._auto_close_timer.start()
+
         return super().eventFilter(watched, event)
+
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.MiddleButton:
+            self._is_dragging = True
+            self._drag_start_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            if not self._is_streaming and self._auto_close_timer.isActive():
+                self._auto_close_timer.stop()
+                self.timer_label.setText("Paused")
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if getattr(self, "_is_dragging", False) and (event.buttons() & Qt.MouseButton.MiddleButton):
+            self.move(event.globalPosition().toPoint() - self._drag_start_pos)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.MiddleButton:
+            self._is_dragging = False
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def enterEvent(self, event) -> None:
         """Pauses auto-close timer on hover so user can comfortably read."""
@@ -276,6 +392,7 @@ class OverlayView(QWidget):
             self._auto_close_timer.stop()
             self.timer_label.setText("Paused")
         super().enterEvent(event)
+
 
     def leaveEvent(self, event) -> None:
         """Resumes auto-close countdown when cursor leaves the overlay."""
@@ -298,7 +415,33 @@ class OverlayView(QWidget):
             self.hide()
             self.dismissed.emit()
 
+    def _copy_to_clipboard(self) -> None:
+        """Copies markdown response to system clipboard with visual confirmation and pauses timer."""
+        text_to_copy = self._raw_markdown.strip() if self._raw_markdown else self.content_edit.toPlainText().strip()
+        if not text_to_copy:
+            return
+
+        clipboard = QGuiApplication.clipboard()
+        if clipboard:
+            clipboard.setText(text_to_copy)
+
+        # Pause countdown timer while user interacts with copy
+        if not self._is_streaming and self._auto_close_timer.isActive():
+            self._auto_close_timer.stop()
+            self.timer_label.setText("Paused")
+
+        self.copy_btn.setText("✓ Copied!")
+        self.copy_btn.setToolTip("Copied response to clipboard!")
+        QTimer.singleShot(1800, self._reset_copy_btn)
+
+    def _reset_copy_btn(self) -> None:
+        """Restores copy button text and tooltip."""
+        if hasattr(self, "copy_btn"):
+            self.copy_btn.setText("📋 Copy")
+            self.copy_btn.setToolTip("Copy response (Markdown) to clipboard")
+
     def _on_fade_finished(self) -> None:
         self.hide()
         self.dismissed.emit()
+
 
