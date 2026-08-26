@@ -27,6 +27,40 @@ An ambient, non-intrusive, transparent desktop AI assistant for **Windows**, **L
 
 ---
 
+### 🧮 LaTeX & Rich Markdown Rendering Pipeline
+- **Mathematical Formula Engine**: Built-in regex-based LaTeX compiler supporting:
+  - Fractions (`\frac{a}{b}`), square roots (`\sqrt{x}`), limits, summations, integrals (`\int`), products.
+  - Subscripts (`x_i`), superscripts (`x^2`), and compound exponents (`x^{n+1}`).
+  - Vectors ($\vec{v}$, $\mathbf{x}$), matrices (`\begin{matrix}`, `\begin{pmatrix}`, `\begin{bmatrix}`).
+  - Full Greek alphabet ($\alpha, \beta, \gamma, \theta, \lambda, \mu, \pi, \sigma, \omega, \Delta, \Sigma, \Omega$).
+  - Display block equations (`$$...$$` or `\[...\]`) and inline formulas (`$...$` or `\(...\)`).
+- **GFM Markdown Tables**: Clean translucent glassmorphic tables with borders, column alignment, and headers.
+- **Pygments Code Highlighting**: Syntax-highlighted code blocks with an in-memory LRU cache (`_PYGMENTS_CACHE`) for optimal rendering performance.
+- **35ms Render Batching**: Buffered token stream rendering that completely eliminates GUI freezes and CPU spikes during high-speed token generation.
+
+---
+
+### 🖱️ Global & Local Middle-Click Window Dragging
+- **Zero-Target Global Drag**: Click and hold the **Middle Mouse Button (Scroll Wheel Click)** anywhere on any display to smoothly reposition the visible Question or Answer window without having to switch focus or hover directly over the UI.
+- **Auto-Pause on Drag**: Repositioning the answer overlay automatically pauses the auto-close countdown so the window remains in place while reading.
+
+---
+
+### 📋 Interactive Header Bar
+- **One-Click Markdown Copy**: Built-in `📋 Copy` button copies formatted Markdown to your clipboard with visual `✓ Copied!` confirmation and timer pause.
+- **Real-Time Agent Status**: Subtle transparent activity status (`🌐 Searching web...`, `📚 Searching docs...`, `✨ Synthesizing...`) keeping you informed of agent workflows.
+
+---
+
+### 🌐 Private Web Search & Deep Article Extraction
+- **Zero-Config SearXNG Auto-Start**: Automatically launches a local, private [SearXNG](https://github.com/searxng/searxng) Docker instance when search is enabled in `config.json`.
+- **Deep Webpage Scraping**: Concurrently fetches the top 32KB of HTML in parallel for top search results, extracting real article bodies, live dates, quotes, and stories rather than just brief 10-word SEO snippets.
+- **Google Priority & News Routing**: Queries news categories and Google News for breaking developments with automatic multi-engine resilience (`reuters, bing, duckduckgo, mojeek`).
+- **In-Memory Query Cache**: 5-minute TTL cache provides instant 0ms responses for repeat and follow-up lookups.
+- **Meteorological Sensor Reports**: Enriches weather questions with real-time temperature, humidity, wind, and multi-day forecast outlooks worldwide.
+
+---
+
 ### 🧠 Dual-Model Routing & VRAM Optimization
 - **Tiered Model Routing**: Decouples fast 1-turn tasks from deep multi-turn reasoning to optimize token throughput and memory footprint.
 - **Resident Model Detection**: Inspects running backend state (`client.ps()`) to prioritize models already cached in GPU memory, avoiding cold-start initialization.
@@ -35,8 +69,8 @@ An ambient, non-intrusive, transparent desktop AI assistant for **Windows**, **L
 ---
 
 ### 📜 Ambient Scrolling & Read Timer Management
-- **Zero-Focus Hover Scrolling**: Scroll through long outputs immediately without having to focus or click the overlay window.
-- **Smart Countdown Pause**: Hovering over or scrolling content automatically suspends the auto-dismiss timer, resuming smoothly when interaction finishes.
+- **Zero-Focus Hover Scrolling**: Scroll through long outputs immediately with the mouse wheel without having to focus or click the overlay window.
+- **Smart Countdown Pause**: Hovering over, scrolling, or dragging content automatically suspends the auto-dismiss timer.
 
 ---
 
@@ -74,6 +108,7 @@ An ambient, non-intrusive, transparent desktop AI assistant for **Windows**, **L
 - Python 3.10+ (Python 3.11, 3.12, and 3.13 supported)
 - [`uv`](https://docs.astral.sh/uv/) (Fast Python package manager)
 - [Ollama](https://ollama.com/) (Local runner) or API keys for Cloud providers (OpenAI, Anthropic, Gemini, Groq).
+- [Docker](https://www.docker.com/) (Optional, for private SearXNG web search).
 
 #### Linux GUI Dependencies
 ```bash
@@ -97,6 +132,27 @@ cd vi.si.on
 
 # Sync project dependencies
 uv sync --all-groups
+```
+
+---
+
+## 🌐 Private Web Search Setup (SearXNG)
+
+**vi.si.on** includes out-of-the-box private web intelligence via SearXNG.
+
+### Automated Setup (Zero-Config)
+1. Ensure Docker Desktop / Docker Engine is running on your system.
+2. In `config.json` (or via the **Setup Wizard**), set `"web_search": { "enabled": true }`.
+3. When you launch **vi.si.on**, the app will **automatically generate `searxng-data/settings.yml`** (with performance tuning) and start the Docker container in the background (`http://localhost:8888`).
+
+### Manual Setup (Optional)
+If you prefer managing the container manually:
+```bash
+# Copy template configuration (already tracked in repo)
+cp -r searxng-data.example searxng-data
+
+# Start SearXNG container
+docker compose -f docker-compose.searxng.yml up -d
 ```
 
 ---
@@ -150,9 +206,9 @@ uv run vi.si.on --setup-shortcuts
 
 ---
 
-## ⌨️ Hotkeys Reference
+## ⌨️ Hotkeys & Gestures Reference
 
-| Hotkey | Action | Description |
+| Input / Gesture | Action | Description |
 |---|---|---|
 | **`Alt + 1`** | **Quick Query** | Low-latency ephemeral query; automatically promotes to conversation on follow-up. |
 | **`Alt + 2`** | **Conversation / Switcher** | Resumes active session. Press repeatedly or use `↑`/`↓` to switch history. |
@@ -160,7 +216,8 @@ uv run vi.si.on --setup-shortcuts
 | **`Alt + 3`** | **Region Snipper** | Screen selection tool; supports stacking multiple snips. |
 | **`Alt + ↑ / ↓`** | **Session Cycling** | Cycles across conversation threads. |
 | **`Esc`** | **Dismiss** | Fades out active modal or overlay. |
-| **Mouse Wheel** | **Scroll Text** | Scrolls content and pauses the auto-dismiss timer. |
+| **Middle Click & Drag** | **Reposition Window** | Click and hold middle mouse button (scroll wheel) **anywhere on any display** to move window. |
+| **Mouse Wheel** | **Scroll Text** | Scrolls response content and pauses the auto-dismiss timer. |
 
 > [!NOTE]
 > **Ubuntu / Wayland Users:**
@@ -168,6 +225,7 @@ uv run vi.si.on --setup-shortcuts
 > - **Option 1 (Automated - Recommended)**: Completing the **Setup Wizard** (`uv run vi.si.on --wizard`) or running `uv run vi.si.on --setup-shortcuts` automatically registers native GNOME shortcuts via `gsettings`.
 > - **Option 2 (Manual)**: Add Custom Shortcuts in **GNOME Settings → Keyboard → Keyboard Shortcuts → Custom Shortcuts** mapped to `uv run vi.si.on --quick`, `uv run vi.si.on --conversation`, `uv run vi.si.on --new`, or `uv run vi.si.on --snip`.
 > - **Option 3 (X11)**: Switch to **Ubuntu on Xorg** at the login screen (gear icon), where global hotkeys work natively out-of-the-box.
+
 
 ---
 

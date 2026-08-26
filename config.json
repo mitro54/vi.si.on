@@ -51,7 +51,7 @@
     "downscale_rate": 200
   },
   "web_search": {
-    "enabled": true,
+    "enabled": false,
     "searxng_url": "http://localhost:8888",
     "max_results": 5
   },
