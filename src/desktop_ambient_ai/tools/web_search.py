@@ -5,6 +5,7 @@ SearXNG-based Web Search Tool with JSON format support.
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import subprocess
 import threading
@@ -113,6 +114,103 @@ class SearXNGSearch:
         if self.config.enabled:
             ensure_searxng_container(self.config, non_blocking=True)
 
+    @staticmethod
+    def _clean_query(query: str) -> str:
+        """Strips conversational noise words and misleading keywords that pollute search index results."""
+        q = re.sub(r"^(what is the|what is|tell me the|search for|find|check)\s+", "", query, flags=re.IGNORECASE).strip()
+        q = re.sub(r"\b(current|live)\s+", "", q, flags=re.IGNORECASE).strip()
+        return q or query
+
+    @staticmethod
+    def _extract_weather_location(query: str) -> str | None:
+        """Dynamically extracts target location from weather query without hardcoded city lists."""
+        if not re.search(r"\b(weather|temperature|forecast|rain|snow|humidity|climate|sää|keli)\b", query, re.IGNORECASE):
+            return None
+
+        # 1. Clean temporal phrases first (e.g. "for this week", "this week", "next 7 days", "today", "tomorrow", etc.)
+        q_clean = re.sub(
+            r"\b(?:for\s+)?(?:this|next)?\s*(?:week|weekend|month|year|today|tonight|tomorrow|now|days?|\d+\s*days?)\b",
+            "",
+            query,
+            flags=re.IGNORECASE,
+        ).strip()
+
+        # 2. Try explicit prepositional match: "in <location>", "at <location>", "kohteessa <location>"
+        prep_match = re.search(
+            r"\b(?:in|at|near|around|city of|region of|town of|kohteessa|alueella)\s+([A-Za-z\u00C0-\u017E0-9\s-]+)",
+            q_clean,
+            re.IGNORECASE,
+        )
+        if prep_match:
+            loc = prep_match.group(1).strip()
+            loc = re.sub(r"^[^\w]+|[^\w]+$", "", loc).strip()
+            if loc:
+                return loc
+
+        # 3. General fallback: strip weather keywords; remaining tokens form the location
+        loc = re.sub(
+            r"\b(weather|temperature|forecast|rain|snow|humidity|climate|sää|keli|current|live|what is the|what is|how is the|check)\b",
+            "",
+            q_clean,
+            flags=re.IGNORECASE,
+        ).strip()
+        loc = re.sub(r"^[^\w]+|[^\w]+$", "", loc).strip()
+        return loc if len(loc) >= 2 else None
+
+    def _enrich_with_live_meteo(self, query: str, results: list[SearchResult]) -> None:
+        """Injects direct real-time meteorological observations and multi-day forecast breakdown."""
+        loc = self._extract_weather_location(query)
+        if not loc:
+            return
+
+        try:
+            with httpx.Client(timeout=4.0) as client:
+                w_resp = client.get(f"https://wttr.in/{loc}?format=j1")
+                if w_resp.status_code == 200:
+                    w_data = w_resp.json()
+                    curr = w_data.get("current_condition", [{}])[0]
+                    temp_c = curr.get("temp_C", "")
+                    desc = curr.get("weatherDesc", [{}])[0].get("value", "")
+                    hum = curr.get("humidity", "")
+                    wind = curr.get("windspeedKmph", "")
+
+                    # Extract multi-day daily forecast breakdown
+                    forecast_lines = []
+                    for day in w_data.get("weather", []):
+                        d_date = day.get("date", "")
+                        d_max = day.get("maxtempC", "")
+                        d_min = day.get("mintempC", "")
+                        d_hourly = day.get("hourly", [])
+                        d_mid = d_hourly[len(d_hourly) // 2] if d_hourly else {}
+                        d_desc = d_mid.get("weatherDesc", [{}])[0].get("value", "")
+                        d_rain = d_mid.get("chanceofrain", "0")
+                        forecast_lines.append(
+                            f"  * {d_date}: Min {d_min}°C, Max {d_max}°C, Condition: {d_desc}, Rain chance: {d_rain}%"
+                        )
+
+                    snippet_parts = []
+                    if temp_c != "":
+                        snippet_parts.append(
+                            f"Current Observation: Temperature {temp_c}°C, Condition: {desc}, "
+                            f"Humidity: {hum}%, Wind speed: {wind} km/h."
+                        )
+                    if forecast_lines:
+                        snippet_parts.append(f"Multi-Day Outlook for {loc.title()}:\n" + "\n".join(forecast_lines))
+
+                    if snippet_parts:
+                        results.insert(
+                            0,
+                            SearchResult(
+                                title=f"Live Meteorological & Forecast Report ({loc.title()})",
+                                url=f"https://wttr.in/{loc}",
+                                snippet="\n\n".join(snippet_parts),
+                            ),
+                        )
+        except (httpx.HTTPError, OSError, ValueError):
+            pass
+
+
+
     def search(self, query: str) -> list[SearchResult]:
         """Executes search query against configured SearXNG instance with resilient multi-engine fallback."""
         if not self.config.searxng_url:
@@ -121,6 +219,7 @@ class SearXNGSearch:
         base_url = self.config.searxng_url.rstrip("/")
         endpoint = f"{base_url}/search"
         reliable_engines = "bing,yahoo,mojeek,wikipedia,duckduckgo"
+        effective_query = self._clean_query(query)
 
         def _do_request(request_params: dict[str, Any]) -> list[SearchResult]:
             with httpx.Client(timeout=10.0) as client:
@@ -141,16 +240,21 @@ class SearXNGSearch:
                 return results
 
         params = {
-            "q": query,
+            "q": effective_query,
             "format": "json",
             "engines": reliable_engines,
         }
 
         try:
             results = _do_request(params)
-            # If primary engines returned 0 results, fallback to broad search without engine restrictions
+            # If cleaned query returned 0 results, retry with raw query
+            if not results and effective_query != query:
+                results = _do_request({"q": query, "format": "json", "engines": reliable_engines})
+            # If multi-engine returned 0 results, fallback to broad search without engine restrictions
             if not results:
-                results = _do_request({"q": query, "format": "json"})
+                results = _do_request({"q": effective_query, "format": "json"})
+
+            self._enrich_with_live_meteo(query, results)
             return results
 
         except (httpx.HTTPError, OSError) as e:
@@ -158,9 +262,12 @@ class SearXNGSearch:
             if ensure_searxng_container(self.config, non_blocking=False):
                 try:
                     results = _do_request(params)
+                    if not results and effective_query != query:
+                        results = _do_request({"q": query, "format": "json", "engines": reliable_engines})
                     if not results:
-                        results = _do_request({"q": query, "format": "json"})
+                        results = _do_request({"q": effective_query, "format": "json"})
                     if results:
+                        self._enrich_with_live_meteo(query, results)
                         return results
                 except (httpx.HTTPError, OSError):
                     pass
@@ -172,6 +279,8 @@ class SearXNGSearch:
                     snippet=f"Failed to connect to SearXNG ({base_url}): {e}",
                 )
             ]
+
+
 
 
     def format_results_for_llm(self, results: list[SearchResult]) -> str:

@@ -137,6 +137,13 @@ class OverlayView(QWidget):
             self.status_label.setText(text)
             self.status_label.setVisible(True)
 
+    def reset_content_for_tool_response(self) -> None:
+        """Clears raw markdown buffer and text display before final tool-synthesized answer streams."""
+        self._raw_markdown = ""
+        self._char_count = 0
+        self.content_edit.clear()
+
+
     def prepare_for_stream(self, spatial: SpatialResult, mode: str = "quick", turn_count: int = 1) -> None:
         """Applies geometry, dynamic styles, and resets text buffers before streaming begins."""
         self.spatial_result = spatial

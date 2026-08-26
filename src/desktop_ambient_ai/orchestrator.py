@@ -660,12 +660,14 @@ class Orchestrator(QObject):
             effective_mode = getattr(self._current_session, "mode", "quick")
             tools = self.tool_registry.get_tool_definitions()
 
+            self.overlay_view.reset_content_for_tool_response()
             self.overlay_view.set_status("✨ Synthesizing live search results...")
             self.llm_worker.start_stream(
                 messages_payload,
                 tools=tools if tools else None,
                 mode=effective_mode,
             )
+
 
 
     @pyqtSlot()
